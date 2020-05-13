@@ -1,18 +1,21 @@
-use crate::context::{Data, ResolveId};
+use crate::context::{Data, DeferList, ResolveId};
 use crate::error::ParseRequestError;
 use crate::mutation_resolver::do_mutation_resolve;
 use crate::parser::parse_query;
 use crate::registry::CacheControl;
 use crate::validation::{check_rules, CheckResult};
 use crate::{
-    do_resolve, ContextBase, Error, ObjectType, Pos, QueryError, Result, Schema, Variables,
+    do_resolve, ContextBase, Error, ObjectType, Pos, QueryError, Result, Schema, SubscriptionType,
+    Variables,
 };
 use async_graphql_parser::ast::OperationType;
+use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use std::any::Any;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 /// IntoQueryBuilder options
 #[derive(Default, Clone)]
@@ -53,6 +56,12 @@ pub struct QueryResponse {
 
     /// Cache control value
     pub cache_control: CacheControl,
+}
+
+impl QueryResponse {
+    pub(crate) fn merge(&mut self, resp: QueryResponse) {
+        todo!()
+    }
 }
 
 /// Query builder
@@ -113,14 +122,49 @@ impl QueryBuilder {
             .set_upload(var_path, filename, content_type, content);
     }
 
-    /// Execute the query.
-    pub async fn execute<Query, Mutation, Subscription>(
+    /// Execute the query, returns a stream, the first result being the query result,
+    /// followed by the incremental result. Only when there are `@defer` and `@stream` directives
+    /// in the query will there be subsequent incremental results.
+    pub async fn execute_stream<Query, Mutation, Subscription>(
         self,
         schema: &Schema<Query, Mutation, Subscription>,
-    ) -> Result<QueryResponse>
+    ) -> impl Stream<Item = Result<QueryResponse>>
     where
-        Query: ObjectType + Send + Sync,
-        Mutation: ObjectType + Send + Sync,
+        Query: ObjectType + Send + Sync + 'static,
+        Mutation: ObjectType + Send + Sync + 'static,
+        Subscription: SubscriptionType + Send + Sync + 'static,
+    {
+        let schema = schema.clone();
+        let stream = async_stream::try_stream! {
+            let (first_resp, defer_list) = self.execute_first(&schema).await?;
+            yield first_resp;
+
+            let mut current_defer_list = defer_list.into_inner();
+
+            loop {
+                let mut new_defer_list = Vec::new();
+                for defer in current_defer_list {
+                    let mut res = defer.await?;
+                    new_defer_list.extend((res.1).into_inner());
+                    yield res.0;
+                }
+                if new_defer_list.is_empty() {
+                    break;
+                }
+                current_defer_list = new_defer_list;
+            }
+        };
+        Box::pin(stream)
+    }
+
+    async fn execute_first<'a, Query, Mutation, Subscription>(
+        self,
+        schema: &Schema<Query, Mutation, Subscription>,
+    ) -> Result<(QueryResponse, DeferList<'a>)>
+    where
+        Query: ObjectType + Send + Sync + 'static,
+        Mutation: ObjectType + Send + Sync + 'static,
+        Subscription: SubscriptionType + Send + Sync + 'static,
     {
         // create extension instances
         let extensions = schema
@@ -179,6 +223,7 @@ impl QueryBuilder {
             };
         }
 
+        let defer_list = DeferList::default();
         let ctx = ContextBase {
             path_node: None,
             resolve_id: ResolveId::root(),
@@ -190,6 +235,7 @@ impl QueryBuilder {
             data: &schema.0.data,
             ctx_data: self.ctx_data.as_ref(),
             document: &document,
+            // defer_list: Some(&defer_list),
         };
 
         extensions.iter().for_each(|e| e.execution_start());
@@ -228,6 +274,24 @@ impl QueryBuilder {
             },
             cache_control,
         };
-        Ok(res)
+        Ok((res, defer_list))
+    }
+
+    /// Execute the query, always return a complete result.
+    pub async fn execute<Query, Mutation, Subscription>(
+        self,
+        schema: &Schema<Query, Mutation, Subscription>,
+    ) -> Result<QueryResponse>
+    where
+        Query: ObjectType + Send + Sync + 'static,
+        Mutation: ObjectType + Send + Sync + 'static,
+        Subscription: SubscriptionType + Send + Sync + 'static,
+    {
+        let mut stream = self.execute_stream(schema).await;
+        let mut resp = stream.next().await.unwrap()?;
+        while let Some(resp_part) = stream.next().await.transpose()? {
+            resp.merge(resp_part);
+        }
+        Ok(resp)
     }
 }

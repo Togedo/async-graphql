@@ -181,6 +181,9 @@ pub fn Scalar(args: TokenStream, input: TokenStream) -> TokenStream {
                 self.to_json()
             }
         }
+
+        #[#crate_name::async_trait::async_trait]
+        impl #generic #crate_name::ResolveOwned for #self_ty #where_clause {}
     };
     expanded.into()
 }

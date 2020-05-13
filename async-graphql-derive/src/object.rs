@@ -387,11 +387,12 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
 
                 resolvers.push(quote! {
                     if ctx.name.node == #field_name {
-                        use #crate_name::OutputValueType;
+                        #[allow(unused_imports)]
+                        use #crate_name::{OutputValueType, ResolveOwned, ResolveRef};
                         #(#get_params)*
                         #guard
                         let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-                        return OutputValueType::resolve(&#resolve_obj, &ctx_obj, ctx.position()).await;
+                        return #resolve_obj.resolve_this(&ctx_obj, &*ctx).await;
                     }
                 });
 
@@ -486,6 +487,9 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                 #crate_name::do_resolve(ctx, self).await
             }
         }
+
+        #[#crate_name::async_trait::async_trait]
+        impl #generics #crate_name::ResolveOwned for #self_ty #where_clause {}
     };
     Ok(expanded.into())
 }

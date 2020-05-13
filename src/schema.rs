@@ -176,6 +176,13 @@ where
             }
         });
 
+        registry.add_directive(Directive {
+            name: "defer",
+            description: None,
+            locations: vec![__DirectiveLocation::FIELD],
+            args: Default::default(),
+        });
+
         // register scalars
         bool::create_type_info(&mut registry);
         i32::create_type_info(&mut registry);
@@ -258,14 +265,16 @@ where
         let resolve_id = AtomicUsize::default();
         let environment = Arc::new(Environment {
             variables,
-            document: Box::new(document),
+            document,
             ctx_data: ctx_data.unwrap_or_default(),
         });
         let ctx = environment.create_context(
-            self,
+            self.registry(),
+            self.data(),
             None,
             &environment.document.current_operation().selection_set,
             &resolve_id,
+            // None,
         );
         let mut streams = Vec::new();
         create_subscription_stream(self, environment.clone(), &ctx, &mut streams).await?;

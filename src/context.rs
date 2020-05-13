@@ -1,16 +1,19 @@
 use crate::extensions::BoxExtension;
 use crate::parser::ast::{Directive, Field, SelectionSet};
 use crate::registry::Registry;
-use crate::{InputValueType, QueryError, Result, Schema, Type};
+use crate::{InputValueType, QueryError, QueryResponse, Result, Type};
 use crate::{Pos, Positioned, Value};
 use async_graphql_parser::ast::Document;
 use async_graphql_parser::UploadValue;
 use fnv::FnvHashMap;
+use futures::Future;
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -234,6 +237,32 @@ impl std::fmt::Display for ResolveId {
     }
 }
 
+#[doc(hidden)]
+pub type BoxDeferFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(QueryResponse, DeferList<'a>)>> + Send + 'a>>;
+
+#[doc(hidden)]
+#[derive(Default)]
+pub struct DeferList<'a>(pub RefCell<Vec<BoxDeferFuture<'a>>>);
+
+impl<'a> DeferList<'a> {
+    pub(crate) fn into_inner(self) -> Vec<BoxDeferFuture<'a>> {
+        self.0.into_inner()
+    }
+
+    pub(crate) fn append<F>(&self, fut: F)
+    where
+        F: Future<Output = Result<(QueryResponse, DeferList<'a>)>> + Send + 'a,
+    {
+        self.0.borrow_mut().push(Box::pin(fut));
+    }
+}
+
+// ⚠️ Warning
+// Since the resolver does not run in multiple threads at the same time, I don't think it is necessary to lock.
+// If you don’t think so, please tell me why.
+unsafe impl<'a> Sync for DeferList<'a> {}
+
 /// Query context
 #[derive(Clone)]
 pub struct ContextBase<'a, T> {
@@ -248,6 +277,7 @@ pub struct ContextBase<'a, T> {
     pub(crate) data: &'a Data,
     pub(crate) ctx_data: Option<&'a Data>,
     pub(crate) document: &'a Document,
+    // pub(crate) defer_list: Option<&'a DeferList<'a>>,
 }
 
 impl<'a, T> Deref for ContextBase<'a, T> {
@@ -261,18 +291,20 @@ impl<'a, T> Deref for ContextBase<'a, T> {
 #[doc(hidden)]
 pub struct Environment {
     pub variables: Variables,
-    pub document: Box<Document>,
+    pub document: Document,
     pub ctx_data: Arc<Data>,
 }
 
 impl Environment {
     #[doc(hidden)]
-    pub fn create_context<'a, T, Query, Mutation, Subscription>(
+    pub fn create_context<'a, T>(
         &'a self,
-        schema: &'a Schema<Query, Mutation, Subscription>,
+        registry: &'a Registry,
+        data: &'a Data,
         path_node: Option<QueryPathNode<'a>>,
         item: T,
         inc_resolve_id: &'a AtomicUsize,
+        // defer_list: Option<&'a DeferList<'a>>,
     ) -> ContextBase<'a, T> {
         ContextBase {
             path_node,
@@ -281,10 +313,11 @@ impl Environment {
             extensions: &[],
             item,
             variables: &self.variables,
-            registry: &schema.0.registry,
-            data: &schema.0.data,
-            ctx_data: Some(&self.ctx_data),
+            registry,
+            data,
+            ctx_data: None,
             document: &self.document,
+            // defer_list,
         }
     }
 }
@@ -321,10 +354,11 @@ impl<'a, T> ContextBase<'a, T> {
             item: field,
             resolve_id: self.get_child_resolve_id(),
             inc_resolve_id: self.inc_resolve_id,
-            variables: self.variables,
             registry: self.registry,
             data: self.data,
             ctx_data: self.ctx_data,
+            // defer_list: self.defer_list,
+            variables: self.variables,
             document: self.document,
         }
     }
@@ -340,11 +374,12 @@ impl<'a, T> ContextBase<'a, T> {
             item: selection_set,
             resolve_id: self.resolve_id,
             inc_resolve_id: &self.inc_resolve_id,
-            variables: self.variables,
             registry: self.registry,
             data: self.data,
             ctx_data: self.ctx_data,
             document: self.document,
+            // defer_list: self.defer_list,
+            variables: self.variables,
         }
     }
 
@@ -446,15 +481,15 @@ impl<'a, T> ContextBase<'a, T> {
                     }
                     .into_error(directive.position()));
                 }
-            } else {
-                return Err(QueryError::UnknownDirective {
-                    name: directive.name.to_string(),
-                }
-                .into_error(directive.position()));
             }
         }
 
         Ok(false)
+    }
+
+    #[doc(hidden)]
+    pub fn is_defer(&self, directives: &[Positioned<Directive>]) -> bool {
+        directives.iter().any(|d| d.name.node == "defer")
     }
 }
 
@@ -470,11 +505,12 @@ impl<'a> ContextBase<'a, &'a Positioned<SelectionSet>> {
             item: self.item,
             resolve_id: self.get_child_resolve_id(),
             inc_resolve_id: self.inc_resolve_id,
-            variables: self.variables,
             registry: self.registry,
             data: self.data,
             ctx_data: self.ctx_data,
             document: self.document,
+            // defer_list: self.defer_list,
+            variables: self.variables,
         }
     }
 }

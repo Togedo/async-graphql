@@ -112,7 +112,7 @@ pub use serde_json;
 
 pub mod http;
 
-pub use base::{ScalarType, Type};
+pub use base::{ResolveOwned, ResolveRef, ScalarType, Type};
 pub use context::{
     Context, ContextBase, Data, Environment, QueryPathNode, QueryPathSegment, Variables,
 };

@@ -1,9 +1,10 @@
 use crate::parser::Pos;
 use crate::registry::Registry;
 use crate::{
-    registry, Context, ContextSelectionSet, FieldResult, InputValueResult, QueryError, Result,
-    Value, ID,
+    registry, Context, ContextSelectionSet, FieldResult, InputValueResult, Positioned, QueryError,
+    Result, Value, ID,
 };
+use async_graphql_parser::ast::Field;
 use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
@@ -250,5 +251,49 @@ impl<T: OutputValueType + Sync> OutputValueType for FieldResult<T> {
                 },
             )),
         }
+    }
+}
+
+#[async_trait::async_trait]
+#[allow(missing_docs)]
+pub trait ResolveRef: OutputValueType + Send + Sync {
+    async fn resolve_this(
+        self,
+        ctx: &ContextSelectionSet<'_>,
+        field: &Positioned<Field>,
+    ) -> Result<serde_json::Value>;
+}
+
+#[async_trait::async_trait]
+#[allow(missing_docs)]
+pub trait ResolveOwned: OutputValueType + Send + Sync + Sized {
+    async fn resolve_this(
+        self,
+        ctx: &ContextSelectionSet<'_>,
+        field: &Positioned<Field>,
+    ) -> Result<serde_json::Value> {
+        if ctx.is_defer(&field.directives) {
+            // if let Some(defer_list) = ctx.defer_list {
+            //     // defer_list.append(async move {
+            //     //     let ctx = ContextSelectionSet{
+            //     //
+            //     //     };
+            //     // });
+            //     return Ok(serde_json::Value::Null);
+            // }
+        }
+        self.resolve(ctx, field.position()).await
+    }
+}
+
+#[async_trait::async_trait]
+#[allow(missing_docs)]
+impl<T: OutputValueType + Send + Sync> ResolveRef for &T {
+    async fn resolve_this(
+        self,
+        ctx: &ContextSelectionSet<'_>,
+        field: &Positioned<Field>,
+    ) -> Result<serde_json::Value> {
+        self.resolve(ctx, field.position()).await
     }
 }
