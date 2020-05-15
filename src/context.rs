@@ -1,9 +1,8 @@
 use crate::extensions::BoxExtension;
-use crate::parser::ast::{Directive, Field, SelectionSet};
+use crate::parser::query::{Directive, Field, SelectionSet};
 use crate::registry::Registry;
-use crate::{InputValueType, QueryError, Result, Schema, Type};
-use crate::{Pos, Positioned, Value};
-use async_graphql_parser::ast::Document;
+use crate::{InputValueType, Lookahead, Pos, Positioned, QueryError, Result, Schema, Type, Value};
+use async_graphql_parser::query::Document;
 use async_graphql_parser::UploadValue;
 use fnv::FnvHashMap;
 use std::any::{Any, TypeId};
@@ -515,5 +514,54 @@ impl<'a> ContextBase<'a, &'a Positioned<Field>> {
             .as_ref()
             .map(|alias| alias.node)
             .unwrap_or_else(|| self.item.name.node)
+    }
+
+    /// Get the position of the current field in the query code.
+    pub fn position(&self) -> Pos {
+        self.pos
+    }
+
+    /// Creates a uniform interface to inspect the forthcoming selections.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use async_graphql::*;
+    ///
+    /// #[SimpleObject]
+    /// struct Detail {
+    ///     c: i32,
+    ///     d: i32,
+    /// }
+    ///
+    /// #[SimpleObject]
+    /// struct MyObj {
+    ///     a: i32,
+    ///     b: i32,
+    ///     #[field(ref)]
+    ///     detail: Detail,
+    /// }
+    ///
+    /// struct Query;
+    ///
+    /// #[Object]
+    /// impl Query {
+    ///     async fn obj(&self, ctx: &Context<'_>) -> MyObj {
+    ///         if ctx.look_ahead().field("a").exists() {
+    ///             // This is a query like `obj { a }`
+    ///         } else if ctx.look_ahead().field("detail").field("c").exists() {
+    ///             // This is a query like `obj { detail { c } }`
+    ///         } else {
+    ///             // This query doesn't have `a`
+    ///         }
+    ///         unimplemented!()
+    ///     }
+    /// }
+    /// ```
+    pub fn look_ahead(&self) -> Lookahead {
+        Lookahead {
+            document: self.document,
+            field: Some(&self.item.node),
+        }
     }
 }

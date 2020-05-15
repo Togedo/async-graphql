@@ -1,9 +1,9 @@
 [package]
-name = "async-graphql-tide"
-version = "1.4.7"
-authors = ["vkill <vkill.net@gmail.com>"]
+name = "async-graphql-lambda"
+version = "0.1.0"
+authors = ["Sunli <scott_s829@163.com>"]
 edition = "2018"
-description = "async-graphql for tide"
+description = "async-graphql for AWS Lambda"
 publish = true
 license = "MIT/Apache-2.0"
 documentation = "https://docs.rs/async-graphql/"
@@ -14,11 +14,6 @@ categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 async-graphql = { path = "..", version = "1.12.7" }
-tide = "0.8"
+lambda_http = { git = "https://github.com/awslabs/aws-lambda-rust-runtime" }
+futures = "0.3.0"
 async-trait = "0.1.30"
-serde_json = "1.0.51"
-
-[dev-dependencies]
-async-std = "1.5.0"
-smol = { version = "0.1", features = ["tokio02"] }
-reqwest = "0.10.4"
