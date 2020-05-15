@@ -1,3 +1,4 @@
+mod boxes;
 mod connection;
 mod empty_mutation;
 mod empty_subscription;

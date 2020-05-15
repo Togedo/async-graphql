@@ -186,3 +186,6 @@ impl From<serde_json::Value> for Value {
         }
     }
 }
+
+unsafe impl Send for Value {}
+unsafe impl Sync for Value {}
