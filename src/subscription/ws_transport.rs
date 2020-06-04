@@ -20,7 +20,7 @@ struct OperationMessage {
     payload: Option<serde_json::Value>,
 }
 
-/// WebSocket transport
+/// WebSocket transport for subscription
 #[derive(Default)]
 pub struct WebSocketTransport {
     id_to_sid: HashMap<String, usize>,
@@ -141,6 +141,7 @@ impl SubscriptionTransport for WebSocketTransport {
                         id: Some(id.clone()),
                         payload: Some(
                             serde_json::to_value(GQLResponse(Ok(QueryResponse {
+                                path: None,
                                 data: value,
                                 extensions: None,
                                 cache_control: Default::default(),

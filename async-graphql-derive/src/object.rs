@@ -1,6 +1,6 @@
 use crate::args;
 use crate::output_type::OutputType;
-use crate::utils::{build_value_repr, check_reserved_name, get_crate_name, get_rustdoc};
+use crate::utils::{check_reserved_name, get_crate_name, get_param_getter_ident, get_rustdoc};
 use inflector::Inflector;
 use proc_macro::TokenStream;
 use quote::quote;
@@ -44,7 +44,11 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
 
     for item in &mut item_impl.items {
         if let ImplItem::Method(method) = item {
-            if let Some(entity) = args::Entity::parse(&crate_name, &method.attrs)? {
+            if args::Entity::parse(&crate_name, &method.attrs)?.is_some() {
+                if method.sig.asyncness.is_none() {
+                    return Err(Error::new_spanned(&method, "Must be asynchronous"));
+                }
+
                 let ty = match &method.sig.output {
                     ReturnType::Type(_, ty) => OutputType::parse(ty)?,
                     ReturnType::Default => {
@@ -126,7 +130,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                     });
                     key_getter.push(quote! {
                         params.get(#name).and_then(|value| {
-                            let value: Option<#ty> = #crate_name::InputValueType::parse(value.clone()).ok();
+                            let value: Option<#ty> = #crate_name::InputValueType::parse(Some(value.clone())).ok();
                             value
                         })
                     });
@@ -155,18 +159,13 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                 }
                 let do_find = quote! { self.#field_ident(ctx, #(#use_keys),*).await.map_err(|err| err.into_error(ctx.position()))? };
 
-                let guard = entity.guard.map(
-                    |guard| quote! { #guard.check(ctx).await.map_err(|err| err.into_error(ctx.position()))?; },
-                );
-
                 find_entities.push((
                     args.len(),
                     quote! {
                         if typename == &<#entity_type as #crate_name::Type>::type_name() {
                             if let (#(#key_pat),*) = (#(#key_getter),*) {
-                                #guard
                                 let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-                                return #crate_name::OutputValueType::resolve(&#do_find, &ctx_obj, ctx.position()).await;
+                                return #crate_name::OutputValueType::resolve(&#do_find, &ctx_obj, ctx.item).await;
                             }
                         }
                     },
@@ -303,9 +302,8 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         .unwrap_or_else(|| quote! {None});
                     let schema_default = default
                         .as_ref()
-                        .map(|v| {
-                            let s = v.to_string();
-                            quote! {Some(#s)}
+                        .map(|value| {
+                            quote! {Some( <#ty as #crate_name::InputValueType>::to_value(&#value).to_string() )}
                         })
                         .unwrap_or_else(|| quote! {None});
 
@@ -321,18 +319,14 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
 
                     use_params.push(quote! { #ident });
 
-                    let default = match &default {
-                        Some(default) => {
-                            let repr = build_value_repr(&crate_name, &default);
-                            quote! {|| #repr }
-                        }
-                        None => {
-                            quote! { || #crate_name::Value::Null }
-                        }
+                    let default = match default {
+                        Some(default) => quote! { Some(|| -> #ty { #default }) },
+                        None => quote! { None },
                     };
-
+                    let param_getter_name = get_param_getter_ident(&ident.ident.to_string());
                     get_params.push(quote! {
-                        let #ident: #ty = ctx.param_value(#name, #default)?;
+                        let #param_getter_name = || -> #crate_name::Result<#ty> { ctx.param_value(#name, #default) };
+                        let #ident: #ty = #param_getter_name()?;
                     });
                 }
 
@@ -343,7 +337,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         name: #field_name.to_string(),
                         description: #field_desc,
                         args: {
-                            let mut args = std::collections::HashMap::new();
+                            let mut args = #crate_name::indexmap::IndexMap::new();
                             #(#schema_args)*
                             args
                         },
@@ -384,6 +378,12 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         #guard.check(ctx).await
                             .map_err(|err| err.into_error_with_path(ctx.position(), ctx.path_node.as_ref().unwrap().to_json()))?;
                     });
+                let post_guard = field
+                    .post_guard
+                    .map(|guard| quote! {
+                        #guard.check(ctx, &res).await
+                            .map_err(|err| err.into_error_with_path(ctx.position(), ctx.path_node.as_ref().unwrap().to_json()))?;
+                    });
 
                 resolvers.push(quote! {
                     if ctx.name.node == #field_name {
@@ -391,7 +391,9 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         #(#get_params)*
                         #guard
                         let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-                        return OutputValueType::resolve(&#resolve_obj, &ctx_obj, ctx.position()).await;
+                        let res = #resolve_obj;
+                        #post_guard
+                        return OutputValueType::resolve(&res, &ctx_obj, ctx.item).await;
                     }
                 });
 
@@ -441,7 +443,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                     name: #gql_typename.to_string(),
                     description: #desc,
                     fields: {
-                        let mut fields = std::collections::HashMap::new();
+                        let mut fields = #crate_name::indexmap::IndexMap::new();
                         #(#schema_fields)*
                         fields
                     },
@@ -465,6 +467,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                 }.into_error(ctx.position()))
             }
 
+            #[allow(unused_variables)]
             async fn find_entity(&self, ctx: &#crate_name::Context<'_>, params: &#crate_name::Value) -> #crate_name::Result<#crate_name::serde_json::Value> {
                 let params = match params {
                     #crate_name::Value::Object(params) => params,
@@ -482,7 +485,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
 
         #[#crate_name::async_trait::async_trait]
         impl #generics #crate_name::OutputValueType for #self_ty #where_clause {
-            async fn resolve(&self, ctx: &#crate_name::ContextSelectionSet<'_>, pos: #crate_name::Pos) -> #crate_name::Result<#crate_name::serde_json::Value> {
+            async fn resolve(&self, ctx: &#crate_name::ContextSelectionSet<'_>, _field: &#crate_name::Positioned<#crate_name::parser::query::Field>) -> #crate_name::Result<#crate_name::serde_json::Value> {
                 #crate_name::do_resolve(ctx, self).await
             }
         }

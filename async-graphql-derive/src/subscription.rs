@@ -1,6 +1,6 @@
 use crate::args;
 use crate::output_type::OutputType;
-use crate::utils::{build_value_repr, check_reserved_name, get_crate_name, get_rustdoc};
+use crate::utils::{check_reserved_name, get_crate_name, get_param_getter_ident, get_rustdoc};
 use inflector::Inflector;
 use proc_macro::TokenStream;
 use quote::quote;
@@ -155,9 +155,8 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         .unwrap_or_else(|| quote! {None});
                     let schema_default = default
                         .as_ref()
-                        .map(|v| {
-                            let s = v.to_string();
-                            quote! {Some(#s)}
+                        .map(|value| {
+                            quote! {Some( <#ty as #crate_name::InputValueType>::to_value(&#value).to_string() )}
                         })
                         .unwrap_or_else(|| quote! {None});
 
@@ -173,15 +172,13 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
 
                     use_params.push(quote! { #ident });
 
-                    let default = match &default {
-                        Some(default) => {
-                            let repr = build_value_repr(&crate_name, &default);
-                            quote! {|| #repr }
-                        }
-                        None => quote! { || #crate_name::Value::Null },
+                    let default = match default {
+                        Some(default) => quote! { Some(|| -> #ty { #default }) },
+                        None => quote! { None },
                     };
-
+                    let param_getter_name = get_param_getter_ident(&ident.ident.to_string());
                     get_params.push(quote! {
+                        let #param_getter_name = || -> #crate_name::Result<#ty> { ctx.param_value(#name, #default) };
                         let #ident: #ty = ctx.param_value(#name, #default)?;
                     });
                 }
@@ -213,7 +210,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         name: #field_name.to_string(),
                         description: #field_desc,
                         args: {
-                            let mut args = std::collections::HashMap::new();
+                            let mut args = #crate_name::indexmap::IndexMap::new();
                             #(#schema_args)*
                             args
                         },
@@ -234,6 +231,12 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                 let guard = field.guard.map(|guard| quote! {
                     #guard.check(ctx).await.map_err(|err| err.into_error_with_path(ctx.position(), ctx.path_node.as_ref().unwrap().to_json()))?;
                 });
+                if field.post_guard.is_some() {
+                    return Err(Error::new_spanned(
+                        method,
+                        "The subscription field does not support post guard",
+                    ));
+                }
 
                 create_stream.push(quote! {
                     if ctx.name.node == #field_name {
@@ -242,37 +245,31 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         #(#get_params)*
                         #guard
                         let field_name = std::sync::Arc::new(ctx.result_name().to_string());
+                        let field = std::sync::Arc::new(ctx.item.clone());
 
-                        // I think the code here is safe because the lifetime of selection_set is always less than the environment.
-                        let field_selection_set = unsafe {
-                            (&ctx.selection_set
-                                as *const #crate_name::Positioned<#crate_name::parser::query::SelectionSet>)
-                                .as_ref()
-                                .unwrap()
-                        };
-
-                        let schema = schema.clone();
                         let pos = ctx.position();
-                        let environment = environment.clone();
+                        let schema_env = schema_env.clone();
+                        let query_env = query_env.clone();
                         let stream = #create_field_stream.then({
                             let field_name = field_name.clone();
                             move |msg| {
-                                let environment = environment.clone();
-                                let field_selection_set = field_selection_set.clone();
-                                let schema = schema.clone();
+                                let schema_env = schema_env.clone();
+                                let query_env = query_env.clone();
+                                let field = field.clone();
                                 let field_name = field_name.clone();
                                 async move {
                                     let resolve_id = std::sync::atomic::AtomicUsize::default();
-                                    let ctx_selection_set = environment.create_context(
-                                        &schema,
+                                    let ctx_selection_set = query_env.create_context(
+                                        &schema_env,
                                         Some(#crate_name::QueryPathNode {
                                             parent: None,
                                             segment: #crate_name::QueryPathSegment::Name(&field_name),
                                         }),
-                                        field_selection_set,
+                                        &field.selection_set,
                                         &resolve_id,
+                                        None,
                                     );
-                                    #crate_name::OutputValueType::resolve(&msg, &ctx_selection_set, pos).await
+                                    #crate_name::OutputValueType::resolve(&msg, &ctx_selection_set, &*field).await
                                 }
                             }
                         })
@@ -316,7 +313,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                     name: #gql_typename.to_string(),
                     description: #desc,
                     fields: {
-                        let mut fields = std::collections::HashMap::new();
+                        let mut fields = #crate_name::indexmap::IndexMap::new();
                         #(#schema_fields)*
                         fields
                     },
@@ -331,16 +328,14 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
         impl #crate_name::SubscriptionType for #self_ty #where_clause {
             #[allow(unused_variables)]
             #[allow(bare_trait_objects)]
-            async fn create_field_stream<Query, Mutation>(
+            async fn create_field_stream(
                 &self,
                 idx: usize,
                 ctx: &#crate_name::Context<'_>,
-                schema: &#crate_name::Schema<Query, Mutation, Self>,
-                environment: std::sync::Arc<#crate_name::Environment>,
+                schema_env: #crate_name::SchemaEnv,
+                query_env: #crate_name::QueryEnv,
             ) -> #crate_name::Result<std::pin::Pin<Box<dyn #crate_name::futures::Stream<Item = #crate_name::Result<#crate_name::serde_json::Value>> + Send>>>
             where
-                Query: #crate_name::ObjectType + Send + Sync + 'static,
-                Mutation: #crate_name::ObjectType + Send + Sync + 'static,
                 Self: Send + Sync + 'static + Sized,
             {
                 use #crate_name::futures::StreamExt;

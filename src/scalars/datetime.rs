@@ -1,16 +1,12 @@
-use crate::{InputValueError, InputValueResult, Result, ScalarType, Value};
+use crate::{InputValueError, InputValueResult, ScalarType, Value};
 use async_graphql_derive::Scalar;
 use chrono::{DateTime, TimeZone, Utc};
 
 /// Implement the DateTime<Utc> scalar
 ///
 /// The input/output is a string in RFC3339 format.
-#[Scalar(internal)]
+#[Scalar(internal, name = "DateTime")]
 impl ScalarType for DateTime<Utc> {
-    fn type_name() -> &'static str {
-        "DateTime"
-    }
-
     fn parse(value: Value) -> InputValueResult<Self> {
         match value {
             Value::String(s) => Ok(Utc.datetime_from_str(&s, "%+")?),
@@ -18,7 +14,7 @@ impl ScalarType for DateTime<Utc> {
         }
     }
 
-    fn to_json(&self) -> Result<serde_json::Value> {
-        Ok(self.to_rfc3339().into())
+    fn to_value(&self) -> Value {
+        Value::String(self.to_rfc3339())
     }
 }

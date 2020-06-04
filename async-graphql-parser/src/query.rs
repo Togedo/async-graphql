@@ -3,9 +3,9 @@ use crate::value::Value;
 use std::collections::HashMap;
 use std::fmt;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Type {
-    Named(&'static str),
+    Named(String),
     List(Box<Type>),
     NonNull(Box<Type>),
 }
@@ -20,10 +20,10 @@ impl fmt::Display for Type {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Directive {
-    pub name: Positioned<&'static str>,
-    pub arguments: Vec<(Positioned<&'static str>, Positioned<Value>)>,
+    pub name: Positioned<String>,
+    pub arguments: Vec<(Positioned<String>, Positioned<Value>)>,
 }
 
 impl Directive {
@@ -35,8 +35,9 @@ impl Directive {
     }
 }
 
-pub type FragmentsMap = HashMap<&'static str, Positioned<FragmentDefinition>>;
+pub type FragmentsMap = HashMap<String, Positioned<FragmentDefinition>>;
 
+/// Query operation type
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum OperationType {
     Query,
@@ -44,16 +45,15 @@ pub enum OperationType {
     Subscription,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CurrentOperation {
     pub ty: OperationType,
     pub variable_definitions: Vec<Positioned<VariableDefinition>>,
     pub selection_set: Positioned<SelectionSet>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Document {
-    pub(crate) source: String,
     pub(crate) definitions: Vec<Positioned<Definition>>,
     pub(crate) fragments: FragmentsMap,
     pub(crate) current_operation: Option<CurrentOperation>,
@@ -94,7 +94,7 @@ impl Document {
                         OperationDefinition::Query(query)
                             if query.name.is_none()
                                 || operation_name.is_none()
-                                || query.name.as_ref().map(|name| name.node)
+                                || query.name.as_ref().map(|name| name.node.as_str())
                                     == operation_name.as_deref() =>
                         {
                             self.current_operation = Some(CurrentOperation {
@@ -106,8 +106,8 @@ impl Document {
                         OperationDefinition::Mutation(mutation)
                             if mutation.name.is_none()
                                 || operation_name.is_none()
-                                || mutation.name.as_ref().map(|name| name.node)
-                                    == operation_name.as_deref() =>
+                                || mutation.name.as_ref().map(|name| name.node.as_str())
+                                    == operation_name =>
                         {
                             self.current_operation = Some(CurrentOperation {
                                 ty: OperationType::Mutation,
@@ -118,8 +118,8 @@ impl Document {
                         OperationDefinition::Subscription(subscription)
                             if subscription.name.is_none()
                                 || operation_name.is_none()
-                                || subscription.name.as_ref().map(|name| name.node)
-                                    == operation_name.as_deref() =>
+                                || subscription.name.as_ref().map(|name| name.node.as_str())
+                                    == operation_name =>
                         {
                             self.current_operation = Some(CurrentOperation {
                                 ty: OperationType::Subscription,
@@ -132,7 +132,7 @@ impl Document {
                 }
                 Definition::Operation(_) => {}
                 Definition::Fragment(fragment) => {
-                    fragments.insert(fragment.name.node, fragment);
+                    fragments.insert(fragment.name.clone_inner(), fragment);
                 }
             }
         }
@@ -141,26 +141,26 @@ impl Document {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Definition {
     Operation(Positioned<OperationDefinition>),
     Fragment(Positioned<FragmentDefinition>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TypeCondition {
-    On(Positioned<&'static str>),
+    On(Positioned<String>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FragmentDefinition {
-    pub name: Positioned<&'static str>,
+    pub name: Positioned<String>,
     pub type_condition: Positioned<TypeCondition>,
     pub directives: Vec<Positioned<Directive>>,
     pub selection_set: Positioned<SelectionSet>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum OperationDefinition {
     SelectionSet(Positioned<SelectionSet>),
     Query(Positioned<Query>),
@@ -168,54 +168,54 @@ pub enum OperationDefinition {
     Subscription(Positioned<Subscription>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Query {
-    pub name: Option<Positioned<&'static str>>,
+    pub name: Option<Positioned<String>>,
     pub variable_definitions: Vec<Positioned<VariableDefinition>>,
     pub directives: Vec<Positioned<Directive>>,
     pub selection_set: Positioned<SelectionSet>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Mutation {
-    pub name: Option<Positioned<&'static str>>,
+    pub name: Option<Positioned<String>>,
     pub variable_definitions: Vec<Positioned<VariableDefinition>>,
     pub directives: Vec<Positioned<Directive>>,
     pub selection_set: Positioned<SelectionSet>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Subscription {
-    pub name: Option<Positioned<&'static str>>,
+    pub name: Option<Positioned<String>>,
     pub variable_definitions: Vec<Positioned<VariableDefinition>>,
     pub directives: Vec<Positioned<Directive>>,
     pub selection_set: Positioned<SelectionSet>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SelectionSet {
     pub items: Vec<Positioned<Selection>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct VariableDefinition {
-    pub name: Positioned<&'static str>,
+    pub name: Positioned<String>,
     pub var_type: Positioned<Type>,
     pub default_value: Option<Positioned<Value>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Selection {
     Field(Positioned<Field>),
     FragmentSpread(Positioned<FragmentSpread>),
     InlineFragment(Positioned<InlineFragment>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Field {
-    pub alias: Option<Positioned<&'static str>>,
-    pub name: Positioned<&'static str>,
-    pub arguments: Vec<(Positioned<&'static str>, Positioned<Value>)>,
+    pub alias: Option<Positioned<String>>,
+    pub name: Positioned<String>,
+    pub arguments: Vec<(Positioned<String>, Positioned<Value>)>,
     pub directives: Vec<Positioned<Directive>>,
     pub selection_set: Positioned<SelectionSet>,
 }
@@ -229,13 +229,13 @@ impl Field {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FragmentSpread {
-    pub fragment_name: Positioned<&'static str>,
+    pub fragment_name: Positioned<String>,
     pub directives: Vec<Positioned<Directive>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InlineFragment {
     pub type_condition: Option<Positioned<TypeCondition>>,
     pub directives: Vec<Positioned<Directive>>,

@@ -66,9 +66,9 @@ impl<'a> Visitor<'a> for NoUnusedFragments<'a> {
         _ctx: &mut VisitorContext<'a>,
         fragment_definition: &'a Positioned<FragmentDefinition>,
     ) {
-        self.current_scope = Some(Scope::Fragment(fragment_definition.name.node));
+        self.current_scope = Some(Scope::Fragment(fragment_definition.name.as_str()));
         self.defined_fragments.insert((
-            fragment_definition.name.node,
+            fragment_definition.name.as_str(),
             fragment_definition.position(),
         ));
     }
@@ -82,7 +82,7 @@ impl<'a> Visitor<'a> for NoUnusedFragments<'a> {
             self.spreads
                 .entry(scope.clone())
                 .or_insert_with(Vec::new)
-                .push(fragment_spread.fragment_name.node);
+                .push(fragment_spread.fragment_name.as_str());
         }
     }
 }
@@ -90,7 +90,7 @@ impl<'a> Visitor<'a> for NoUnusedFragments<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validation::test_harness::{expect_fails_rule, expect_passes_rule};
+    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory<'a>() -> NoUnusedFragments<'a> {
         NoUnusedFragments::default()
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn all_fragment_names_are_used() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           {
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn all_fragment_names_are_used_by_multiple_operations() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo {
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn contains_unknown_fragments() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo {
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn contains_unknown_fragments_with_ref_cycle() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo {
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn contains_unknown_and_undef_fragments() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo {

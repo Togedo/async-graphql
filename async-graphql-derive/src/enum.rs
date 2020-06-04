@@ -146,7 +146,7 @@ pub fn generate(enum_args: &args::Enum, input: &DeriveInput) -> Result<TokenStre
                         name: #gql_typename.to_string(),
                         description: #desc,
                         enum_values: {
-                            let mut enum_items = std::collections::HashMap::new();
+                            let mut enum_items = #crate_name::indexmap::IndexMap::new();
                             #(#schema_enum_items)*
                             enum_items
                         },
@@ -156,15 +156,19 @@ pub fn generate(enum_args: &args::Enum, input: &DeriveInput) -> Result<TokenStre
         }
 
         impl #crate_name::InputValueType for #ident {
-            fn parse(value: #crate_name::Value) -> #crate_name::InputValueResult<Self> {
-                #crate_name::EnumType::parse_enum(value)
+            fn parse(value: Option<#crate_name::Value>) -> #crate_name::InputValueResult<Self> {
+                #crate_name::EnumType::parse_enum(value.unwrap_or_default())
+            }
+
+            fn to_value(&self) -> #crate_name::Value {
+                #crate_name::EnumType::to_value(self)
             }
         }
 
         #[#crate_name::async_trait::async_trait]
         impl #crate_name::OutputValueType for #ident {
-            async fn resolve(&self, _: &#crate_name::ContextSelectionSet<'_>, _pos: #crate_name::Pos) -> #crate_name::Result<#crate_name::serde_json::Value> {
-                #crate_name::EnumType::resolve_enum(self)
+            async fn resolve(&self, _: &#crate_name::ContextSelectionSet<'_>, _field: &#crate_name::Positioned<#crate_name::parser::query::Field>) -> #crate_name::Result<#crate_name::serde_json::Value> {
+                Ok(#crate_name::EnumType::to_value(self).into())
             }
         }
     };

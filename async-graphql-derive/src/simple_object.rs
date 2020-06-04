@@ -95,10 +95,14 @@ pub fn generate(object_args: &args::Object, input: &mut DeriveInput) -> Result<T
                 let guard = field
                     .guard
                     .map(|guard| quote! { #guard.check(ctx).await.map_err(|err| err.into_error_with_path(ctx.position(), ctx.path_node.as_ref().unwrap().to_json()))?; });
+                let post_guard = field
+                    .post_guard
+                    .map(|guard| quote! { #guard.check(ctx, &res).await.map_err(|err| err.into_error_with_path(ctx.position(), ctx.path_node.as_ref().unwrap().to_json()))?; });
 
                 if field.is_ref {
                     getters.push(quote! {
                         #[inline]
+                        #[allow(missing_docs)]
                         #vis async fn #ident(&self, ctx: &#crate_name::Context<'_>) -> #crate_name::FieldResult<&#ty> {
                             Ok(&self.#ident)
                         }
@@ -106,6 +110,7 @@ pub fn generate(object_args: &args::Object, input: &mut DeriveInput) -> Result<T
                 } else {
                     getters.push(quote! {
                         #[inline]
+                        #[allow(missing_docs)]
                         #vis async fn #ident(&self, ctx: &#crate_name::Context<'_>) -> #crate_name::FieldResult<#ty> {
                             Ok(self.#ident.clone())
                         }
@@ -117,7 +122,8 @@ pub fn generate(object_args: &args::Object, input: &mut DeriveInput) -> Result<T
                         #guard
                         let res = self.#ident(ctx).await.map_err(|err| err.into_error_with_path(ctx.position(), ctx.path_node.as_ref().unwrap().to_json()))?;
                         let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-                        return #crate_name::OutputValueType::resolve(&res, &ctx_obj, ctx.position()).await;
+                        #post_guard
+                        return #crate_name::OutputValueType::resolve(&res, &ctx_obj, ctx.item).await;
                     }
                 });
             }
@@ -161,7 +167,7 @@ pub fn generate(object_args: &args::Object, input: &mut DeriveInput) -> Result<T
                     name: #gql_typename.to_string(),
                     description: #desc,
                     fields: {
-                        let mut fields = std::collections::HashMap::new();
+                        let mut fields = #crate_name::indexmap::IndexMap::new();
                         #(#schema_fields)*
                         fields
                     },
@@ -185,7 +191,7 @@ pub fn generate(object_args: &args::Object, input: &mut DeriveInput) -> Result<T
 
         #[#crate_name::async_trait::async_trait]
         impl #generics #crate_name::OutputValueType for #ident #generics #where_clause {
-            async fn resolve(&self, ctx: &#crate_name::ContextSelectionSet<'_>, _pos: #crate_name::Pos) -> #crate_name::Result<#crate_name::serde_json::Value> {
+            async fn resolve(&self, ctx: &#crate_name::ContextSelectionSet<'_>, _field: &#crate_name::Positioned<#crate_name::parser::query::Field>) -> #crate_name::Result<#crate_name::serde_json::Value> {
                 #crate_name::do_resolve(ctx, self).await
             }
         }

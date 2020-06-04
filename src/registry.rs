@@ -1,6 +1,9 @@
 use crate::parser::query::Type as ParsedType;
 use crate::validators::InputValueValidator;
 use crate::{model, Any, Type as _, Value};
+use indexmap::map::IndexMap;
+use indexmap::set::IndexSet;
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::sync::Arc;
@@ -94,7 +97,7 @@ pub struct MetaInputValue {
     pub name: &'static str,
     pub description: Option<&'static str>,
     pub ty: String,
-    pub default_value: Option<&'static str>,
+    pub default_value: Option<String>,
     pub validator: Option<Arc<dyn InputValueValidator>>,
 }
 
@@ -102,7 +105,7 @@ pub struct MetaInputValue {
 pub struct MetaField {
     pub name: String,
     pub description: Option<&'static str>,
-    pub args: HashMap<&'static str, MetaInputValue>,
+    pub args: IndexMap<&'static str, MetaInputValue>,
     pub ty: String,
     pub deprecation: Option<&'static str>,
     pub cache_control: CacheControl,
@@ -203,7 +206,7 @@ pub enum MetaType {
     Object {
         name: String,
         description: Option<&'static str>,
-        fields: HashMap<String, MetaField>,
+        fields: IndexMap<String, MetaField>,
         cache_control: CacheControl,
         extends: bool,
         keys: Option<Vec<String>>,
@@ -211,25 +214,25 @@ pub enum MetaType {
     Interface {
         name: String,
         description: Option<&'static str>,
-        fields: HashMap<String, MetaField>,
-        possible_types: HashSet<String>,
+        fields: IndexMap<String, MetaField>,
+        possible_types: IndexSet<String>,
         extends: bool,
         keys: Option<Vec<String>>,
     },
     Union {
         name: String,
         description: Option<&'static str>,
-        possible_types: HashSet<String>,
+        possible_types: IndexSet<String>,
     },
     Enum {
         name: String,
         description: Option<&'static str>,
-        enum_values: HashMap<&'static str, MetaEnumValue>,
+        enum_values: IndexMap<&'static str, MetaEnumValue>,
     },
     InputObject {
         name: String,
         description: Option<&'static str>,
-        input_fields: HashMap<String, MetaInputValue>,
+        input_fields: IndexMap<String, MetaInputValue>,
     },
 }
 
@@ -238,7 +241,7 @@ impl MetaType {
         self.fields().and_then(|fields| fields.get(name))
     }
 
-    pub fn fields(&self) -> Option<&HashMap<String, MetaField>> {
+    pub fn fields(&self) -> Option<&IndexMap<String, MetaField>> {
         match self {
             MetaType::Object { fields, .. } => Some(&fields),
             MetaType::Interface { fields, .. } => Some(&fields),
@@ -300,7 +303,7 @@ impl MetaType {
         }
     }
 
-    pub fn possible_types(&self) -> Option<&HashSet<String>> {
+    pub fn possible_types(&self) -> Option<&IndexSet<String>> {
         match self {
             MetaType::Interface { possible_types, .. } => Some(possible_types),
             MetaType::Union { possible_types, .. } => Some(possible_types),
@@ -331,7 +334,7 @@ pub struct MetaDirective {
     pub name: &'static str,
     pub description: Option<&'static str>,
     pub locations: Vec<model::__DirectiveLocation>,
-    pub args: HashMap<&'static str, MetaInputValue>,
+    pub args: IndexMap<&'static str, MetaInputValue>,
 }
 
 pub struct Registry {
@@ -406,7 +409,7 @@ impl Registry {
         match query_type {
             ParsedType::NonNull(ty) => self.concrete_type_by_parsed_type(ty),
             ParsedType::List(ty) => self.concrete_type_by_parsed_type(ty),
-            ParsedType::Named(name) => self.types.get(*name),
+            ParsedType::Named(name) => self.types.get(name.as_str()),
         }
     }
 
@@ -419,7 +422,23 @@ impl Registry {
                 continue;
             }
 
-            write!(sdl, "\t{}: {}", field.name, field.ty).ok();
+            if !field.args.is_empty() {
+                write!(
+                    sdl,
+                    "\t{}({}): {}",
+                    field.name,
+                    field
+                        .args
+                        .values()
+                        .map(|arg| federation_input_value(arg))
+                        .join(""),
+                    field.ty
+                )
+                .ok();
+            } else {
+                write!(sdl, "\t{}: {}", field.name, field.ty).ok();
+            }
+
             if field.external {
                 write!(sdl, " @external").ok();
             }
@@ -435,6 +454,12 @@ impl Registry {
 
     fn create_federation_type(&self, ty: &MetaType, sdl: &mut String) {
         match ty {
+            MetaType::Scalar { name, .. } => {
+                const SYSTEM_SCALARS: &[&str] = &["Int", "Float", "String", "Boolean", "ID", "Any"];
+                if !SYSTEM_SCALARS.contains(&name.as_str()) {
+                    writeln!(sdl, "scalar {}", name).ok();
+                }
+            }
             MetaType::Object {
                 name,
                 fields,
@@ -442,21 +467,24 @@ impl Registry {
                 keys,
                 ..
             } => {
-                if name.starts_with("__") {
-                    return;
-                }
-                if name == "_Service" {
-                    return;
-                }
-                if fields.len() == 4 {
+                if name == &self.query_type && fields.len() == 4 {
                     // Is empty query root, only __schema, __type, _service, _entities fields
                     return;
                 }
-
+                if let Some(subscription_type) = &self.subscription_type {
+                    if name == subscription_type {
+                        return;
+                    }
+                }
                 if *extends {
                     write!(sdl, "extend ").ok();
                 }
                 write!(sdl, "type {} ", name).ok();
+                if let Some(implements) = self.implements.get(name) {
+                    if !implements.is_empty() {
+                        write!(sdl, "implements {}", implements.iter().join(" & ")).ok();
+                    }
+                }
                 if let Some(keys) = keys {
                     for key in keys {
                         write!(sdl, "@key(fields: \"{}\") ", key).ok();
@@ -486,19 +514,58 @@ impl Registry {
                 Self::create_federation_fields(sdl, fields.values());
                 writeln!(sdl, "}}").ok();
             }
-            _ => {}
+            MetaType::Enum {
+                name, enum_values, ..
+            } => {
+                write!(sdl, "enum {} ", name).ok();
+                writeln!(sdl, "{{").ok();
+                for value in enum_values.values() {
+                    writeln!(sdl, "{}", value.name).ok();
+                }
+                writeln!(sdl, "}}").ok();
+            }
+            MetaType::InputObject {
+                name, input_fields, ..
+            } => {
+                write!(sdl, "input {} ", name).ok();
+                writeln!(sdl, "{{").ok();
+                for field in input_fields.values() {
+                    writeln!(sdl, "{}", federation_input_value(&field)).ok();
+                }
+                writeln!(sdl, "}}").ok();
+            }
+            MetaType::Union {
+                name,
+                possible_types,
+                ..
+            } => {
+                writeln!(
+                    sdl,
+                    "union {} = {}",
+                    name,
+                    possible_types.iter().join(" | ")
+                )
+                .ok();
+            }
         }
     }
 
     pub fn create_federation_sdl(&self) -> String {
         let mut sdl = String::new();
         for ty in self.types.values() {
+            if ty.name().starts_with("__") {
+                continue;
+            }
+            const FEDERATION_TYPES: &[&str] = &["_Any", "_Entity", "_Service"];
+            if FEDERATION_TYPES.contains(&ty.name()) {
+                continue;
+            }
             self.create_federation_type(ty, &mut sdl);
         }
         sdl
     }
 
-    fn has_entities(&self) -> bool {
+    pub(crate) fn has_entities(&self) -> bool {
         self.types.values().any(|ty| match ty {
             MetaType::Object {
                 keys: Some(keys), ..
@@ -540,10 +607,6 @@ impl Registry {
     }
 
     pub fn create_federation_types(&mut self) {
-        if !self.has_entities() {
-            return;
-        }
-
         Any::create_type_info(self);
 
         self.types.insert(
@@ -552,7 +615,7 @@ impl Registry {
                 name: "_Service".to_string(),
                 description: None,
                 fields: {
-                    let mut fields = HashMap::new();
+                    let mut fields = IndexMap::new();
                     fields.insert(
                         "sdl".to_string(),
                         MetaField {
@@ -600,7 +663,7 @@ impl Registry {
                     name: "_entities".to_string(),
                     description: None,
                     args: {
-                        let mut args = HashMap::new();
+                        let mut args = IndexMap::new();
                         args.insert(
                             "representations",
                             MetaInputValue {
@@ -622,5 +685,16 @@ impl Registry {
                 },
             );
         }
+    }
+}
+
+fn federation_input_value(input_value: &MetaInputValue) -> String {
+    if let Some(default_value) = &input_value.default_value {
+        format!(
+            "{}: {} = {}",
+            input_value.name, input_value.ty, default_value
+        )
+    } else {
+        format!("{}: {}", input_value.name, input_value.ty)
     }
 }

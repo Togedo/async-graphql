@@ -13,7 +13,7 @@ impl<'a> Visitor<'a> for KnownTypeNames {
         fragment_definition: &'a Positioned<FragmentDefinition>,
     ) {
         let TypeCondition::On(name) = &fragment_definition.type_condition.node;
-        validate_type(ctx, name.node, fragment_definition.position());
+        validate_type(ctx, name.as_str(), fragment_definition.position());
     }
 
     fn enter_variable_definition(
@@ -36,7 +36,7 @@ impl<'a> Visitor<'a> for KnownTypeNames {
         if let Some(TypeCondition::On(name)) =
             inline_fragment.type_condition.as_ref().map(|c| &c.node)
         {
-            validate_type(ctx, name.node, inline_fragment.position());
+            validate_type(ctx, name.as_str(), inline_fragment.position());
         }
     }
 }
@@ -50,7 +50,7 @@ fn validate_type(ctx: &mut VisitorContext<'_>, type_name: &str, pos: Pos) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validation::test_harness::{expect_fails_rule, expect_passes_rule};
+    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory() -> KnownTypeNames {
         KnownTypeNames::default()
@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn known_type_names_are_valid() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo($var: String, $required: [String!]!) {
@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn unknown_type_names_are_invalid() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($var: JumbledUpLetters) {

@@ -1,15 +1,19 @@
-use crate::extensions::BoxExtension;
+use crate::extensions::Extensions;
 use crate::parser::query::{Directive, Field, SelectionSet};
-use crate::registry::Registry;
-use crate::{InputValueType, Lookahead, Pos, Positioned, QueryError, Result, Schema, Type, Value};
+use crate::schema::SchemaEnv;
+use crate::{
+    InputValueType, Lookahead, Pos, Positioned, QueryError, QueryResponse, Result, Type, Value,
+};
 use async_graphql_parser::query::Document;
 use async_graphql_parser::UploadValue;
 use fnv::FnvHashMap;
+use futures::Future;
+use parking_lot::Mutex;
 use std::any::{Any, TypeId};
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
@@ -24,7 +28,7 @@ impl Default for Variables {
 }
 
 impl Deref for Variables {
-    type Target = BTreeMap<Cow<'static, str>, Value>;
+    type Target = BTreeMap<String, Value>;
 
     fn deref(&self) -> &Self::Target {
         if let Value::Object(obj) = &self.0 {
@@ -192,7 +196,7 @@ impl<'a> QueryPathNode<'a> {
     }
 
     #[doc(hidden)]
-    pub fn to_json(&self) -> serde_json::Value {
+    pub fn to_json(&self) -> Vec<serde_json::Value> {
         let mut path: Vec<serde_json::Value> = Vec::new();
         self.for_each(|segment| {
             path.push(match segment {
@@ -200,7 +204,7 @@ impl<'a> QueryPathNode<'a> {
                 QueryPathSegment::Name(name) => (*name).to_string().into(),
             })
         });
-        path.into()
+        path
     }
 }
 
@@ -233,6 +237,25 @@ impl std::fmt::Display for ResolveId {
     }
 }
 
+#[doc(hidden)]
+pub type BoxDeferFuture =
+    Pin<Box<dyn Future<Output = Result<(QueryResponse, DeferList)>> + Send + 'static>>;
+
+#[doc(hidden)]
+pub struct DeferList {
+    pub path_prefix: Vec<serde_json::Value>,
+    pub futures: Mutex<Vec<BoxDeferFuture>>,
+}
+
+impl DeferList {
+    pub(crate) fn append<F>(&self, fut: F)
+    where
+        F: Future<Output = Result<(QueryResponse, DeferList)>> + Send + 'static,
+    {
+        self.futures.lock().push(Box::pin(fut));
+    }
+}
+
 /// Query context
 #[derive(Clone)]
 pub struct ContextBase<'a, T> {
@@ -240,13 +263,11 @@ pub struct ContextBase<'a, T> {
     pub path_node: Option<QueryPathNode<'a>>,
     pub(crate) resolve_id: ResolveId,
     pub(crate) inc_resolve_id: &'a AtomicUsize,
-    pub(crate) extensions: &'a [BoxExtension],
-    pub(crate) item: T,
-    pub(crate) variables: &'a Variables,
-    pub(crate) registry: &'a Registry,
-    pub(crate) data: &'a Data,
-    pub(crate) ctx_data: Option<&'a Data>,
-    pub(crate) document: &'a Document,
+    #[doc(hidden)]
+    pub item: T,
+    pub(crate) schema_env: &'a SchemaEnv,
+    pub(crate) query_env: &'a QueryEnv,
+    pub(crate) defer_list: Option<&'a DeferList>,
 }
 
 impl<'a, T> Deref for ContextBase<'a, T> {
@@ -258,32 +279,58 @@ impl<'a, T> Deref for ContextBase<'a, T> {
 }
 
 #[doc(hidden)]
-pub struct Environment {
+pub struct QueryEnvInner {
+    pub extensions: Extensions,
     pub variables: Variables,
-    pub document: Box<Document>,
+    pub document: Document,
     pub ctx_data: Arc<Data>,
 }
 
-impl Environment {
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct QueryEnv(Arc<QueryEnvInner>);
+
+impl Deref for QueryEnv {
+    type Target = QueryEnvInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl QueryEnv {
     #[doc(hidden)]
-    pub fn create_context<'a, T, Query, Mutation, Subscription>(
+    pub fn new(
+        extensions: Extensions,
+        variables: Variables,
+        document: Document,
+        ctx_data: Arc<Data>,
+    ) -> QueryEnv {
+        QueryEnv(Arc::new(QueryEnvInner {
+            extensions,
+            variables,
+            document,
+            ctx_data,
+        }))
+    }
+
+    #[doc(hidden)]
+    pub fn create_context<'a, T>(
         &'a self,
-        schema: &'a Schema<Query, Mutation, Subscription>,
+        schema_env: &'a SchemaEnv,
         path_node: Option<QueryPathNode<'a>>,
         item: T,
         inc_resolve_id: &'a AtomicUsize,
+        defer_list: Option<&'a DeferList>,
     ) -> ContextBase<'a, T> {
         ContextBase {
             path_node,
             resolve_id: ResolveId::root(),
             inc_resolve_id,
-            extensions: &[],
             item,
-            variables: &self.variables,
-            registry: &schema.0.registry,
-            data: &schema.0.data,
-            ctx_data: Some(&self.ctx_data),
-            document: &self.document,
+            schema_env,
+            query_env: self,
+            defer_list,
         }
     }
 }
@@ -312,19 +359,16 @@ impl<'a, T> ContextBase<'a, T> {
                     field
                         .alias
                         .as_ref()
-                        .map(|alias| alias.node)
-                        .unwrap_or_else(|| field.name.node),
+                        .map(|alias| alias.as_str())
+                        .unwrap_or_else(|| field.name.as_str()),
                 ),
             }),
-            extensions: self.extensions,
             item: field,
             resolve_id: self.get_child_resolve_id(),
             inc_resolve_id: self.inc_resolve_id,
-            variables: self.variables,
-            registry: self.registry,
-            data: self.data,
-            ctx_data: self.ctx_data,
-            document: self.document,
+            schema_env: self.schema_env,
+            query_env: self.query_env,
+            defer_list: self.defer_list,
         }
     }
 
@@ -335,19 +379,22 @@ impl<'a, T> ContextBase<'a, T> {
     ) -> ContextBase<'a, &'a Positioned<SelectionSet>> {
         ContextBase {
             path_node: self.path_node.clone(),
-            extensions: self.extensions,
             item: selection_set,
             resolve_id: self.resolve_id,
             inc_resolve_id: &self.inc_resolve_id,
-            variables: self.variables,
-            registry: self.registry,
-            data: self.data,
-            ctx_data: self.ctx_data,
-            document: self.document,
+            schema_env: self.schema_env,
+            query_env: self.query_env,
+            defer_list: self.defer_list,
         }
     }
 
     /// Gets the global data defined in the `Context` or `Schema`.
+    ///
+    /// If both `Schema` and `Query` have the same data type, the data in the `Query` is obtained.
+    ///
+    /// # Panics
+    ///
+    /// It will panic if the specified data type does not exist.
     pub fn data<D: Any + Send + Sync>(&self) -> &D {
         self.data_opt::<D>()
             .expect("The specified data type does not exist.")
@@ -355,21 +402,24 @@ impl<'a, T> ContextBase<'a, T> {
 
     /// Gets the global data defined in the `Context` or `Schema`, returns `None` if the specified type data does not exist.
     pub fn data_opt<D: Any + Send + Sync>(&self) -> Option<&D> {
-        self.ctx_data
-            .and_then(|ctx_data| ctx_data.0.get(&TypeId::of::<D>()))
-            .or_else(|| self.data.0.get(&TypeId::of::<D>()))
+        self.query_env
+            .ctx_data
+            .0
+            .get(&TypeId::of::<D>())
+            .or_else(|| self.schema_env.data.0.get(&TypeId::of::<D>()))
             .and_then(|d| d.downcast_ref::<D>())
     }
 
     fn var_value(&self, name: &str, pos: Pos) -> Result<Value> {
         let def = self
+            .query_env
             .document
             .current_operation()
             .variable_definitions
             .iter()
             .find(|def| def.name.node == name);
         if let Some(def) = def {
-            if let Some(var_value) = self.variables.get(def.name.node) {
+            if let Some(var_value) = self.query_env.variables.get(def.name.as_str()) {
                 return Ok(var_value.clone());
             } else if let Some(default) = &def.default_value {
                 return Ok(default.clone_inner());
@@ -381,26 +431,25 @@ impl<'a, T> ContextBase<'a, T> {
         .into_error(pos))
     }
 
-    fn resolve_input_value(&self, mut value: Value, pos: Pos) -> Result<Value> {
+    fn resolve_input_value(&self, value: &mut Value, pos: Pos) -> Result<()> {
         match value {
-            Value::Variable(var_name) => self.var_value(&var_name, pos),
+            Value::Variable(var_name) => {
+                *value = self.var_value(&var_name, pos)?;
+                Ok(())
+            }
             Value::List(ref mut ls) => {
                 for value in ls {
-                    if let Value::Variable(var_name) = value {
-                        *value = self.var_value(&var_name, pos)?;
-                    }
+                    self.resolve_input_value(value, pos)?;
                 }
-                Ok(value)
+                Ok(())
             }
             Value::Object(ref mut obj) => {
                 for value in obj.values_mut() {
-                    if let Value::Variable(var_name) = value {
-                        *value = self.var_value(&var_name, pos)?;
-                    }
+                    self.resolve_input_value(value, pos)?;
                 }
-                Ok(value)
+                Ok(())
             }
-            _ => Ok(value),
+            _ => Ok(()),
         }
     }
 
@@ -409,9 +458,9 @@ impl<'a, T> ContextBase<'a, T> {
         for directive in directives {
             if directive.name.node == "skip" {
                 if let Some(value) = directive.get_argument("if") {
-                    match InputValueType::parse(
-                        self.resolve_input_value(value.clone_inner(), value.position())?,
-                    ) {
+                    let mut inner_value = value.clone_inner();
+                    self.resolve_input_value(&mut inner_value, value.pos)?;
+                    match InputValueType::parse(Some(inner_value)) {
                         Ok(true) => return Ok(true),
                         Ok(false) => {}
                         Err(err) => {
@@ -428,9 +477,9 @@ impl<'a, T> ContextBase<'a, T> {
                 }
             } else if directive.name.node == "include" {
                 if let Some(value) = directive.get_argument("if") {
-                    match InputValueType::parse(
-                        self.resolve_input_value(value.clone_inner(), value.position())?,
-                    ) {
+                    let mut inner_value = value.clone_inner();
+                    self.resolve_input_value(&mut inner_value, value.pos)?;
+                    match InputValueType::parse(Some(inner_value)) {
                         Ok(false) => return Ok(true),
                         Ok(true) => {}
                         Err(err) => {
@@ -445,15 +494,20 @@ impl<'a, T> ContextBase<'a, T> {
                     }
                     .into_error(directive.position()));
                 }
-            } else {
-                return Err(QueryError::UnknownDirective {
-                    name: directive.name.to_string(),
-                }
-                .into_error(directive.position()));
             }
         }
 
         Ok(false)
+    }
+
+    #[doc(hidden)]
+    pub fn is_defer(&self, directives: &[Positioned<Directive>]) -> bool {
+        directives.iter().any(|d| d.name.node == "defer")
+    }
+
+    #[doc(hidden)]
+    pub fn is_stream(&self, directives: &[Positioned<Directive>]) -> bool {
+        directives.iter().any(|d| d.name.node == "stream")
     }
 }
 
@@ -465,45 +519,45 @@ impl<'a> ContextBase<'a, &'a Positioned<SelectionSet>> {
                 parent: self.path_node.as_ref(),
                 segment: QueryPathSegment::Index(idx),
             }),
-            extensions: self.extensions,
             item: self.item,
             resolve_id: self.get_child_resolve_id(),
             inc_resolve_id: self.inc_resolve_id,
-            variables: self.variables,
-            registry: self.registry,
-            data: self.data,
-            ctx_data: self.ctx_data,
-            document: self.document,
+            schema_env: self.schema_env,
+            query_env: self.query_env,
+            defer_list: self.defer_list,
         }
     }
 }
 
 impl<'a> ContextBase<'a, &'a Positioned<Field>> {
     #[doc(hidden)]
-    pub fn param_value<T: InputValueType, F: FnOnce() -> Value>(
+    pub fn param_value<T: InputValueType>(
         &self,
         name: &str,
-        default: F,
+        default: Option<fn() -> T>,
     ) -> Result<T> {
-        match self.get_argument(name).cloned() {
+        let value = self.get_argument(name).cloned();
+        if let Some(default) = default {
+            if value.is_none() {
+                return Ok(default());
+            }
+        }
+        let pos = value
+            .as_ref()
+            .map(|value| value.position())
+            .unwrap_or_default();
+        let value = match value {
             Some(value) => {
-                let pos = value.position();
-                let value = self.resolve_input_value(value.into_inner(), pos)?;
-                match InputValueType::parse(value) {
-                    Ok(res) => Ok(res),
-                    Err(err) => Err(err.into_error(pos, T::qualified_type_name())),
-                }
+                let mut new_value = value.into_inner();
+                self.resolve_input_value(&mut new_value, pos)?;
+                Some(new_value)
             }
-            None => {
-                let value = default();
-                match InputValueType::parse(value) {
-                    Ok(res) => Ok(res),
-                    Err(err) => {
-                        // The default value has no valid location.
-                        Err(err.into_error(Pos::default(), T::qualified_type_name()))
-                    }
-                }
-            }
+            None => None,
+        };
+
+        match InputValueType::parse(value) {
+            Ok(res) => Ok(res),
+            Err(err) => Err(err.into_error(pos, T::qualified_type_name())),
         }
     }
 
@@ -512,8 +566,8 @@ impl<'a> ContextBase<'a, &'a Positioned<Field>> {
         self.item
             .alias
             .as_ref()
-            .map(|alias| alias.node)
-            .unwrap_or_else(|| self.item.name.node)
+            .map(|alias| alias.as_str())
+            .unwrap_or_else(|| self.item.name.as_str())
     }
 
     /// Get the position of the current field in the query code.
@@ -560,7 +614,7 @@ impl<'a> ContextBase<'a, &'a Positioned<Field>> {
     /// ```
     pub fn look_ahead(&self) -> Lookahead {
         Lookahead {
-            document: self.document,
+            document: &self.query_env.document,
             field: Some(&self.item.node),
         }
     }

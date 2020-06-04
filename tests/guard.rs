@@ -61,11 +61,6 @@ pub async fn test_guard() {
         async fn obj(&self) -> MyObj {
             MyObj { value: 99 }
         }
-
-        #[entity(guard(RoleGuard(role = "Role::Admin")))]
-        async fn find_obj(&self, value: i32) -> MyObj {
-            MyObj { value }
-        }
     }
 
     struct Subscription;
@@ -190,55 +185,6 @@ pub async fn test_guard() {
             },
         }
     );
-
-    let query = r#"{
-            _entities(representations: [{__typename: "MyObj", value: 1}]) {
-                __typename
-                ... on MyObj {
-                    value
-                }
-            }
-        }"#;
-    assert_eq!(
-        QueryBuilder::new(query)
-            .data(Role::Admin)
-            .execute(&schema)
-            .await
-            .unwrap()
-            .data,
-        serde_json::json!({
-            "_entities": [
-                {"__typename": "MyObj", "value": 1},
-            ]
-        })
-    );
-
-    let query = r#"{
-            _entities(representations: [{__typename: "MyObj", value: 1}]) {
-                __typename
-                ... on MyObj {
-                    value
-                }
-            }
-        }"#;
-    assert_eq!(
-        QueryBuilder::new(query)
-            .data(Role::Guest)
-            .execute(&schema)
-            .await
-            .unwrap_err(),
-        Error::Query {
-            pos: Pos {
-                line: 2,
-                column: 13
-            },
-            path: None,
-            err: QueryError::FieldError {
-                err: "Forbidden".to_string(),
-                extended_error: None,
-            },
-        }
-    );
 }
 
 #[async_std::test]
@@ -320,14 +266,14 @@ pub async fn test_multiple_guards() {
 
 #[async_std::test]
 pub async fn test_guard_forward_arguments() {
-    struct UserGuard<'a> {
-        id: &'a ID,
+    struct UserGuard {
+        id: ID,
     }
 
     #[async_trait::async_trait]
-    impl<'a> Guard for UserGuard<'a> {
+    impl Guard for UserGuard {
         async fn check(&self, ctx: &Context<'_>) -> FieldResult<()> {
-            if ctx.data_opt::<ID>() != Some(self.id) {
+            if ctx.data_opt::<ID>() != Some(&self.id) {
                 Err("Forbidden".into())
             } else {
                 Ok(())

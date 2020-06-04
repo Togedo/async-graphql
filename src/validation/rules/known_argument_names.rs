@@ -3,7 +3,7 @@ use crate::registry::MetaInputValue;
 use crate::validation::suggestion::make_suggestion;
 use crate::validation::visitor::{Visitor, VisitorContext};
 use crate::{Positioned, Value};
-use std::collections::HashMap;
+use indexmap::map::IndexMap;
 
 enum ArgsType<'a> {
     Directive(&'a str),
@@ -15,7 +15,7 @@ enum ArgsType<'a> {
 
 #[derive(Default)]
 pub struct KnownArgumentNames<'a> {
-    current_args: Option<(&'a HashMap<&'static str, MetaInputValue>, ArgsType<'a>)>,
+    current_args: Option<(&'a IndexMap<&'static str, MetaInputValue>, ArgsType<'a>)>,
 }
 
 impl<'a> KnownArgumentNames<'a> {
@@ -41,7 +41,7 @@ impl<'a> Visitor<'a> for KnownArgumentNames<'a> {
         self.current_args = ctx
             .registry
             .directives
-            .get(directive.name.node)
+            .get(directive.name.as_str())
             .map(|d| (&d.args, ArgsType::Directive(&directive.name)));
     }
 
@@ -56,11 +56,11 @@ impl<'a> Visitor<'a> for KnownArgumentNames<'a> {
     fn enter_argument(
         &mut self,
         ctx: &mut VisitorContext<'a>,
-        name: &'a Positioned<&str>,
+        name: &'a Positioned<String>,
         _value: &'a Positioned<Value>,
     ) {
         if let Some((args, arg_type)) = &self.current_args {
-            if !args.contains_key(name.node) {
+            if !args.contains_key(name.as_str()) {
                 match arg_type {
                     ArgsType::Field {
                         field_name,
@@ -115,7 +115,7 @@ impl<'a> Visitor<'a> for KnownArgumentNames<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validation::test_harness::{expect_fails_rule, expect_passes_rule};
+    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory<'a>() -> KnownArgumentNames<'a> {
         KnownArgumentNames::default()
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn single_arg_is_known() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           fragment argOnRequiredArg on Dog {
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn multiple_args_are_known() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           fragment multipleArgs on ComplicatedArgs {
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn ignores_args_of_unknown_fields() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           fragment argOnUnknownField on Dog {
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn multiple_args_in_reverse_order_are_known() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           fragment multipleArgsReverseOrder on ComplicatedArgs {
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn no_args_on_optional_arg() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           fragment noArgOnOptionalArg on Dog {
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn args_are_known_deeply() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           {
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn directive_args_are_known() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           {
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn undirective_args_are_invalid() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           {
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn invalid_arg_name() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           fragment invalidArgName on Dog {
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn unknown_args_amongst_known_args() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           fragment oneGoodArgOneInvalidArg on Dog {
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn unknown_args_deeply() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           {

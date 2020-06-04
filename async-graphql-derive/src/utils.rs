@@ -1,4 +1,3 @@
-use async_graphql_parser::Value;
 use proc_macro2::{Span, TokenStream};
 use proc_macro_crate::crate_name;
 use quote::quote;
@@ -11,56 +10,6 @@ pub fn get_crate_name(internal: bool) -> TokenStream {
         let name = crate_name("async-graphql").unwrap_or_else(|_| "async_graphql".to_owned());
         let id = Ident::new(&name, Span::call_site());
         quote! { #id }
-    }
-}
-
-pub fn build_value_repr(crate_name: &TokenStream, value: &Value) -> TokenStream {
-    match value {
-        Value::Variable(_) => unreachable!(),
-        Value::Int(n) => {
-            quote! { #crate_name::Value::Int(#n) }
-        }
-        Value::Float(n) => {
-            quote! { #crate_name::Value::Float(#n) }
-        }
-        Value::String(s) => {
-            quote! { #crate_name::Value::String(#s.to_string().into()) }
-        }
-        Value::Boolean(n) => {
-            quote! { #crate_name::Value::Boolean(#n) }
-        }
-        Value::Null => {
-            quote! { #crate_name::Value::Null }
-        }
-        Value::Enum(n) => {
-            quote! { #crate_name::Value::Enum(#n.to_string()) }
-        }
-        Value::List(ls) => {
-            let members = ls
-                .iter()
-                .map(|v| build_value_repr(crate_name, v))
-                .collect::<Vec<_>>();
-            quote! { #crate_name::Value::List(vec![#(#members),*]) }
-        }
-        Value::Object(obj) => {
-            let members = obj
-                .iter()
-                .map(|(n, v)| {
-                    let value = build_value_repr(crate_name, v);
-                    quote! {
-                        obj.insert(#n.to_string().into(), #value);
-                    }
-                })
-                .collect::<Vec<_>>();
-            quote! {
-                {
-                    let mut obj = std::collections::BTreeMap::new();
-                    #(#members)*
-                    #crate_name::Value::Object(obj)
-                }
-            }
-        }
-        Value::Upload(_) => quote! { #crate_name::Value::Null },
     }
 }
 
@@ -122,7 +71,7 @@ fn parse_nested_validator(
                         let name = &nv.path;
                         if let Lit::Str(value) = &nv.lit {
                             let expr = syn::parse_str::<Expr>(&value.value())?;
-                            params.push(quote! { #name: #expr.into() });
+                            params.push(quote! { #name: (#expr).into() });
                         } else {
                             return Err(Error::new_spanned(
                                 &nv.lit,
@@ -184,11 +133,11 @@ pub fn parse_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Option<
                                 if let Lit::Str(value) = &nv.lit {
                                     let value_str = value.value();
                                     if value_str.starts_with('@') {
-                                        let id = Ident::new(&value_str[1..], value.span());
-                                        params.push(quote! { #name: &#id });
+                                        let getter_name = get_param_getter_ident(&value_str[1..]);
+                                        params.push(quote! { #name: #getter_name()? });
                                     } else {
                                         let expr = syn::parse_str::<Expr>(&value_str)?;
-                                        params.push(quote! { #name: #expr.into() });
+                                        params.push(quote! { #name: (#expr).into() });
                                     }
                                 } else {
                                     return Err(Error::new_spanned(
@@ -221,18 +170,122 @@ pub fn parse_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Option<
     Ok(None)
 }
 
+pub fn parse_post_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Option<TokenStream>> {
+    for arg in &args.nested {
+        if let NestedMeta::Meta(Meta::List(ls)) = arg {
+            if ls.path.is_ident("post_guard") {
+                let mut guards = None;
+
+                for item in &ls.nested {
+                    if let NestedMeta::Meta(Meta::List(ls)) = item {
+                        let ty = &ls.path;
+                        let mut params = Vec::new();
+                        for attr in &ls.nested {
+                            if let NestedMeta::Meta(Meta::NameValue(nv)) = attr {
+                                let name = &nv.path;
+                                if let Lit::Str(value) = &nv.lit {
+                                    let value_str = value.value();
+                                    if value_str.starts_with('@') {
+                                        let getter_name = get_param_getter_ident(&value_str[1..]);
+                                        params.push(quote! { #name: #getter_name()? });
+                                    } else {
+                                        let expr = syn::parse_str::<Expr>(&value_str)?;
+                                        params.push(quote! { #name: (#expr).into() });
+                                    }
+                                } else {
+                                    return Err(Error::new_spanned(
+                                        &nv.lit,
+                                        "Value must be string literal",
+                                    ));
+                                }
+                            } else {
+                                return Err(Error::new_spanned(attr, "Invalid property for guard"));
+                            }
+                        }
+
+                        let guard = quote! { #ty { #(#params),* } };
+                        if guards.is_none() {
+                            guards = Some(guard);
+                        } else {
+                            guards = Some(
+                                quote! { #crate_name::guard::PostGuardExt::and(#guard, #guards) },
+                            );
+                        }
+                    } else {
+                        return Err(Error::new_spanned(item, "Invalid guard"));
+                    }
+                }
+
+                return Ok(guards);
+            }
+        }
+    }
+
+    Ok(None)
+}
+
 pub fn get_rustdoc(attrs: &[Attribute]) -> Result<Option<String>> {
+    let mut full_docs = String::new();
     for attr in attrs {
         match attr.parse_meta()? {
             Meta::NameValue(nv) if nv.path.is_ident("doc") => {
                 if let Lit::Str(doc) = nv.lit {
                     let doc = doc.value();
                     let doc_str = doc.trim();
-                    return Ok(Some(doc_str.to_string()));
+                    if !full_docs.is_empty() {
+                        full_docs += "\n";
+                    }
+                    full_docs += doc_str;
                 }
             }
             _ => {}
         }
     }
-    Ok(None)
+    Ok(if full_docs.is_empty() {
+        None
+    } else {
+        Some(full_docs)
+    })
+}
+
+pub fn parse_default(lit: &Lit) -> Result<TokenStream> {
+    match lit {
+        Lit::Str(value) =>{
+            let value = value.value();
+            Ok(quote!({ #value.to_string() }))
+        }
+        Lit::Int(value) => {
+            let value = value.base10_parse::<i32>()?;
+            Ok(quote!({ #value as i32 }))
+        }
+        Lit::Float(value) => {
+            let value = value.base10_parse::<f64>()?;
+            Ok(quote!({ #value as f64 }))
+        }
+        Lit::Bool(value) => {
+            let value = value.value;
+            Ok(quote!({ #value }))
+        }
+        _ => Err(Error::new_spanned(
+            lit,
+            "The default value type only be string, integer, float and boolean, other types should use default_with",
+        )),
+    }
+}
+
+pub fn parse_default_with(lit: &Lit) -> Result<TokenStream> {
+    if let Lit::Str(str) = lit {
+        let str = str.value();
+        let tokens: TokenStream = str.parse()?;
+        Ok(quote! { (#tokens) })
+    } else {
+        Err(Error::new_spanned(
+            &lit,
+            "Attribute 'default' should be a string.",
+        ))
+    }
+}
+
+pub fn get_param_getter_ident(name: &str) -> Ident {
+    Ident::new(&format!("__{}_getter", name), Span::call_site())
 }

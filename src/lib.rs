@@ -1,4 +1,4 @@
-//! # The GraphQL server library implemented by rust
+//! # A GraphQL server library implemented in Rust
 //!
 //! <div align="center">
 //! <!-- CI -->
@@ -71,15 +71,40 @@
 //! * [GraphQL over WebSocket Protocol](https://github.com/apollographql/subscriptions-transport-ws/blob/master/PROTOCOL.md)
 //! * [Apollo Tracing](https://github.com/apollographql/apollo-tracing)
 //! * [Apollo Federation](https://www.apollographql.com/docs/apollo-server/federation/introduction)
+//!
+//! ## Examples
+//!
+//! If you are just getting started, we recommend checking out our examples at:
+//! [https://github.com/async-graphql/examples](https://github.com/async-graphql/examples)
+//!
+//! To see how you would create a Relay-compliant server using async-graphql, warp, diesel & postgresql, you can also check out a real-world example at:
+//! [https://github.com/phated/twentyfive-stars](https://github.com/phated/twentyfive-stars)
+//!
+//! ## Benchmarks
+//!
+//! Ensure that there is no CPU-heavy process in background!
+//!
+//! ```shell script
+//! cd benchmark
+//! cargo bench
+//! ```
+//!
+//! Now HTML report is available at `benchmark/target/criterion/report`
+//!
 
 #![warn(missing_docs)]
 #![allow(clippy::needless_doctest_main)]
 #![allow(clippy::needless_lifetimes)]
+#![allow(clippy::trivially_copy_pass_by_ref)]
+#![recursion_limit = "256"]
+#![forbid(unsafe_code)]
 
 #[macro_use]
 extern crate thiserror;
 #[macro_use]
 extern crate serde_derive;
+#[macro_use]
+extern crate log;
 
 mod base;
 mod context;
@@ -109,31 +134,33 @@ pub use async_trait;
 #[doc(hidden)]
 pub use futures;
 #[doc(hidden)]
+pub use indexmap;
+#[doc(hidden)]
 pub use serde_json;
 
 pub mod http;
 
 pub use base::{ScalarType, Type};
 pub use context::{
-    Context, ContextBase, Data, Environment, QueryPathNode, QueryPathSegment, Variables,
+    Context, ContextBase, Data, QueryEnv, QueryPathNode, QueryPathSegment, Variables,
 };
 pub use error::{
     Error, ErrorExtensions, FieldError, FieldResult, InputValueError, InputValueResult,
-    ParseRequestError, QueryError, ResultExt,
+    ParseRequestError, QueryError, ResultExt, RuleError,
 };
 pub use look_ahead::Lookahead;
 pub use parser::{Pos, Positioned, Value};
-pub use query::{IntoQueryBuilder, IntoQueryBuilderOpts, QueryBuilder, QueryResponse};
+pub use query::{
+    IntoQueryBuilder, IntoQueryBuilderOpts, QueryBuilder, QueryResponse, StreamResponse,
+};
 pub use registry::CacheControl;
 pub use scalars::{Any, Json, ID};
-pub use schema::Schema;
+pub use schema::{Schema, SchemaBuilder, SchemaEnv};
 pub use subscription::{
-    SimpleBroker, SubscriptionStream, SubscriptionStreams, SubscriptionTransport,
-    WebSocketTransport,
+    SimpleBroker, SubscriptionStreams, SubscriptionTransport, WebSocketTransport,
 };
 pub use types::{
-    Connection, Cursor, DataSource, EmptyEdgeFields, EmptyMutation, EmptySubscription, PageInfo,
-    QueryOperation, Upload,
+    connection, Deferred, EmptyMutation, EmptySubscription, MaybeUndefined, Streamed, Upload,
 };
 pub use validation::ValidationMode;
 
@@ -235,7 +262,7 @@ pub use types::{EnumItem, EnumType};
 ///         Ok(self.value)
 ///     }
 ///
-///     async fn value_with_arg(&self, #[arg(default = "1")] a: i32) -> i32 {
+///     async fn value_with_arg(&self, #[arg(default = 1)] a: i32) -> i32 {
 ///         a
 ///     }
 /// }
@@ -389,7 +416,7 @@ pub use async_graphql_derive::Enum;
 /// #[InputObject]
 /// struct MyInputObject {
 ///     a: i32,
-///     #[field(default = "10")]
+///     #[field(default = 10)]
 ///     b: i32,
 /// }
 ///
@@ -430,6 +457,7 @@ pub use async_graphql_derive::InputObject;
 /// | Attribute   | description               | Type     | Optional |
 /// |-------------|---------------------------|----------|----------|
 /// | name        | Field name                | string   | N        |
+/// | method      | Rust resolver method name. If specified, `name` will not be camelCased in schema definition | string | Y |
 /// | type        | Field type                | string   | N        |
 /// | desc        | Field description         | string   | Y        |
 /// | deprecation | Field deprecation reason  | string   | Y        |
@@ -486,6 +514,12 @@ pub use async_graphql_derive::InputObject;
 ///     async fn value_c(&self, a: i32, b: i32) -> i32 {
 ///         a + b
 ///     }
+///
+///     /// Disabled name transformation, don't forget "method" argument in interface!
+///     #[field(name = "value_d")]
+///     async fn value_d(&self) -> i32 {
+///         &self.value + 1
+///     }
 /// }
 ///
 /// #[Interface(
@@ -494,6 +528,7 @@ pub use async_graphql_derive::InputObject;
 ///     field(name = "value_c", type = "i32",
 ///         arg(name = "a", type = "i32"),
 ///         arg(name = "b", type = "i32")),
+///     field(name = "value_d", method = "value_d", type = "i32"),
 /// )]
 /// enum MyInterface {
 ///     TypeA(TypeA)
@@ -517,13 +552,15 @@ pub use async_graphql_derive::InputObject;
 ///             valueA
 ///             valueB
 ///             valueC(a: 3, b: 2)
+///             value_d
 ///         }
 ///     }"#).await.unwrap().data;
 ///     assert_eq!(res, serde_json::json!({
 ///         "typeA": {
 ///             "valueA": "hello",
 ///             "valueB": 10,
-///             "valueC": 5
+///             "valueC": 5,
+///             "value_d": 11
 ///         }
 ///     }));
 /// }
@@ -654,4 +691,12 @@ pub use async_graphql_derive::Subscription;
 pub use async_graphql_derive::DataSource;
 
 /// Define a Scalar
+///
+/// # Macro parameters
+///
+/// | Attribute   | description               | Type     | Optional |
+/// |-------------|---------------------------|----------|----------|
+/// | name        | Scalar name               | string   | Y        |
+/// | desc        | Scalar description        | string   | Y        |
+///
 pub use async_graphql_derive::Scalar;

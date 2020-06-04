@@ -1,14 +1,9 @@
-use crate::{InputValueError, InputValueResult, Result, ScalarType, Value};
+use crate::{InputValueError, InputValueResult, ScalarType, Value};
 use async_graphql_derive::Scalar;
 use chrono::NaiveTime;
 
-/// Implement the NaiveTime scalar
 #[Scalar(internal)]
 impl ScalarType for NaiveTime {
-    fn type_name() -> &'static str {
-        "NaiveTime"
-    }
-
     fn parse(value: Value) -> InputValueResult<Self> {
         match value {
             Value::String(s) => Ok(NaiveTime::parse_from_str(&s, "%H:%M:%S")?),
@@ -16,7 +11,7 @@ impl ScalarType for NaiveTime {
         }
     }
 
-    fn to_json(&self) -> Result<serde_json::Value> {
-        Ok(self.format("%H:%M:%S").to_string().into())
+    fn to_value(&self) -> Value {
+        Value::String(self.format("%H:%M:%S").to_string())
     }
 }

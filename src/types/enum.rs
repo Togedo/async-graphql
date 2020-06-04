@@ -1,4 +1,4 @@
-use crate::{InputValueError, InputValueResult, Result, Type, Value};
+use crate::{InputValueError, InputValueResult, Type, Value};
 
 #[allow(missing_docs)]
 pub struct EnumItem<T> {
@@ -14,7 +14,7 @@ pub trait EnumType: Type + Sized + Eq + Send + Copy + Sized + 'static {
     fn parse_enum(value: Value) -> InputValueResult<Self> {
         let value = match &value {
             Value::Enum(s) => s,
-            Value::String(s) => s.as_ref(),
+            Value::String(s) => s.as_str(),
             _ => return Err(InputValueError::ExpectedType(value)),
         };
 
@@ -31,11 +31,11 @@ pub trait EnumType: Type + Sized + Eq + Send + Copy + Sized + 'static {
         )))
     }
 
-    fn resolve_enum(&self) -> Result<serde_json::Value> {
+    fn to_value(&self) -> Value {
         let items = Self::items();
         for item in items {
             if item.value == *self {
-                return Ok(item.name.into());
+                return Value::Enum(item.name.into());
             }
         }
         unreachable!()

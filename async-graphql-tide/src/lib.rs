@@ -3,14 +3,22 @@
 #![warn(missing_docs)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::needless_doctest_main)]
+#![forbid(unsafe_code)]
 
-use async_graphql::http::GQLResponse;
+use async_graphql::http::{multipart_stream, GQLRequest, GQLResponse, StreamBody};
 use async_graphql::{
     IntoQueryBuilder, IntoQueryBuilderOpts, ObjectType, ParseRequestError, QueryBuilder,
-    QueryResponse, Schema, SubscriptionType,
+    QueryResponse, Schema, StreamResponse, SubscriptionType,
 };
 use async_trait::async_trait;
-use tide::{http::headers, Request, Response, Status, StatusCode};
+use futures::channel::mpsc;
+use futures::io::BufReader;
+use futures::{SinkExt, StreamExt};
+use std::str::FromStr;
+use tide::{
+    http::{headers, Method},
+    Body, Request, Response, Status, StatusCode,
+};
 
 /// GraphQL request handler
 ///
@@ -109,22 +117,69 @@ impl<State: Send + Sync + 'static> RequestExt<State> for Request<State> {
         self,
         opts: IntoQueryBuilderOpts,
     ) -> Result<QueryBuilder, ParseRequestError> {
-        let content_type = self
-            .header(&headers::CONTENT_TYPE)
-            .and_then(|values| values.first().map(|value| value.to_string()));
-        (content_type, self).into_query_builder_opts(&opts).await
+        if self.method() == Method::Get {
+            match self.query::<GQLRequest>() {
+                Ok(gql_request) => gql_request.into_query_builder_opts(&opts).await,
+                Err(_) => Err(ParseRequestError::Io(std::io::Error::from(
+                    std::io::ErrorKind::InvalidInput,
+                ))),
+            }
+        } else {
+            let content_type = self
+                .header(&headers::CONTENT_TYPE)
+                .and_then(|values| values.get(0).map(|value| value.to_string()));
+            (content_type, self).into_query_builder_opts(&opts).await
+        }
     }
 }
 
 /// Tide response extension
 ///
 pub trait ResponseExt: Sized {
-    /// Set Body as the result of a GraphQL query.
+    /// Set body as the result of a GraphQL query.
     fn body_graphql(self, res: async_graphql::Result<QueryResponse>) -> serde_json::Result<Self>;
+
+    /// Set body as the result of a GraphQL streaming query.
+    fn body_graphql_stream(self, res: StreamResponse) -> serde_json::Result<Self>;
 }
 
 impl ResponseExt for Response {
     fn body_graphql(self, res: async_graphql::Result<QueryResponse>) -> serde_json::Result<Self> {
-        self.body_json(&GQLResponse(res))
+        add_cache_control(self, &res).body_json(&GQLResponse(res))
     }
+
+    fn body_graphql_stream(mut self, res: StreamResponse) -> serde_json::Result<Self> {
+        match res {
+            StreamResponse::Single(res) => self.body_graphql(res),
+            StreamResponse::Stream(stream) => {
+                // Body::from_reader required Sync, however StreamResponse does not have Sync.
+                // I created an issue and got a reply that this might be fixed in the future.
+                // https://github.com/http-rs/http-types/pull/144
+                // Now I can only use forwarding to solve the problem.
+                let mut stream =
+                    Box::pin(multipart_stream(stream).map(Result::Ok::<_, std::io::Error>));
+                let (mut tx, rx) = mpsc::channel(0);
+                async_std::task::spawn(async move {
+                    while let Some(item) = stream.next().await {
+                        if tx.send(item).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                self.set_body(Body::from_reader(BufReader::new(StreamBody::new(rx)), None));
+                Ok(self.set_header(tide::http::headers::CONTENT_TYPE, "multipart/mixed"))
+            }
+        }
+    }
+}
+
+fn add_cache_control(http_resp: Response, resp: &async_graphql::Result<QueryResponse>) -> Response {
+    if let Ok(QueryResponse { cache_control, .. }) = resp {
+        if let Some(cache_control) = cache_control.value() {
+            if let Ok(header) = tide::http::headers::HeaderName::from_str("cache-control") {
+                return http_resp.set_header(header, cache_control);
+            }
+        }
+    }
+    http_resp
 }

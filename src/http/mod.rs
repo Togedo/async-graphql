@@ -2,14 +2,14 @@
 
 mod graphiql_source;
 mod into_query_builder;
-mod multipart;
+mod multipart_stream;
 mod playground_source;
 mod stream_body;
-mod token_reader;
 
 use itertools::Itertools;
 
 pub use graphiql_source::graphiql_source;
+pub use multipart_stream::multipart_stream;
 pub use playground_source::playground_source;
 pub use stream_body::StreamBody;
 
@@ -61,6 +61,10 @@ impl Serialize for GQLResponse {
         match &self.0 {
             Ok(res) => {
                 let mut map = serializer.serialize_map(None)?;
+                if let Some(path) = &res.path {
+                    map.serialize_key("path")?;
+                    map.serialize_value(path)?;
+                }
                 map.serialize_key("data")?;
                 map.serialize_value(&res.data)?;
                 if res.extensions.is_some() {
@@ -211,6 +215,7 @@ mod tests {
     #[test]
     fn test_response_data() {
         let resp = GQLResponse(Ok(QueryResponse {
+            path: None,
             data: json!({"ok": true}),
             extensions: None,
             cache_control: Default::default(),

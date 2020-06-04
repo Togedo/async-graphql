@@ -15,7 +15,7 @@ const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct WSSubscription<Query, Mutation, Subscription> {
     schema: Schema<Query, Mutation, Subscription>,
     hb: Instant,
-    sink: Option<mpsc::Sender<Bytes>>,
+    sink: Option<mpsc::UnboundedSender<Bytes>>,
     init_context_data: Option<Box<dyn Fn(serde_json::Value) -> FieldResult<Data> + Send + Sync>>,
 }
 
@@ -127,6 +127,8 @@ where
     Subscription: SubscriptionType + Send + Sync + 'static,
 {
     fn handle(&mut self, data: Bytes, ctx: &mut Self::Context) {
-        ctx.text(unsafe { std::str::from_utf8_unchecked(&data) });
+        if let Ok(text) = std::str::from_utf8(&data) {
+            ctx.text(text);
+        }
     }
 }

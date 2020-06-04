@@ -4,10 +4,10 @@ use crate::Value;
 /// Integer range validator
 pub struct IntRange {
     /// Minimum value, including this value.
-    pub min: i64,
+    pub min: i32,
 
     /// Maximum value, including this value.
-    pub max: i64,
+    pub max: i32,
 }
 
 impl InputValueValidator for IntRange {
@@ -15,7 +15,7 @@ impl InputValueValidator for IntRange {
         if let Value::Int(n) = value {
             if *n < self.min || *n > self.max {
                 Some(format!(
-                    "the value is {}, but the range must be between {} and {}",
+                    "the value is {}, must be between {} and {}",
                     *n, self.min, self.max
                 ))
             } else {
@@ -30,7 +30,7 @@ impl InputValueValidator for IntRange {
 /// Integer less then validator
 pub struct IntLessThan {
     /// Less then this value.
-    pub value: i64,
+    pub value: i32,
 }
 
 impl InputValueValidator for IntLessThan {
@@ -53,7 +53,7 @@ impl InputValueValidator for IntLessThan {
 /// Integer greater then validator
 pub struct IntGreaterThan {
     /// Greater then this value.
-    pub value: i64,
+    pub value: i32,
 }
 
 impl InputValueValidator for IntGreaterThan {
@@ -80,7 +80,7 @@ impl InputValueValidator for IntNonZero {
     fn is_valid(&self, value: &Value) -> Option<String> {
         if let Value::Int(n) = value {
             if *n == 0 {
-                Some(format!("the value is {}, but must be nonzero", *n,))
+                Some(format!("the value is {}, must be nonzero", *n,))
             } else {
                 None
             }
@@ -93,14 +93,17 @@ impl InputValueValidator for IntNonZero {
 /// Integer equal validator
 pub struct IntEqual {
     /// equal this value.
-    pub value: i64,
+    pub value: i32,
 }
 
 impl InputValueValidator for IntEqual {
     fn is_valid(&self, value: &Value) -> Option<String> {
         if let Value::Int(n) = value {
             if *n != self.value {
-                Some(format!("the value is {}, must be equal {}", *n, self.value))
+                Some(format!(
+                    "the value is {}, must be equal to {}",
+                    *n, self.value
+                ))
             } else {
                 None
             }

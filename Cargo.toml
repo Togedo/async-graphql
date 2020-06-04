@@ -1,9 +1,9 @@
 [package]
 name = "async-graphql"
-version = "1.12.7"
+version = "1.14.13"
 authors = ["sunli <scott_s829@163.com>"]
 edition = "2018"
-description = "The GraphQL server library implemented by rust"
+description = "A GraphQL server library implemented in Rust"
 publish = true
 license = "MIT/Apache-2.0"
 documentation = "https://docs.rs/async-graphql/"
@@ -14,11 +14,11 @@ categories = ["network-programming", "asynchronous"]
 readme = "README.md"
 
 [features]
-default = ["bson", "uuid", "url", "chrono-tz"]
+default = ["bson", "url", "chrono-tz"]
 
 [dependencies]
-async-graphql-parser = { path = "async-graphql-parser", version = "0.3.1" }
-async-graphql-derive = { path = "async-graphql-derive", version = "1.12.7" }
+async-graphql-parser = { path = "async-graphql-parser", version = "1.14.2" }
+async-graphql-derive = { path = "async-graphql-derive", version = "1.14.0" }
 anyhow = "1.0.26"
 thiserror = "1.0.11"
 async-trait = "0.1.30"
@@ -42,8 +42,12 @@ http = "0.2.1"
 fnv = "1.0.6"
 regex = "1.3.5"
 tracing = "0.1.13"
+indexmap = "1.3.2"
+async-stream = "0.2.1"
+multer = "1.2.0"
+log = "0.4.8"
 bson = { version = "0.14.1", optional = true }
-uuid = { version = "0.8.1", optional = true }
+uuid = { version = "0.8.1", features = ["v4"] }
 url = { version = "2.1.1", optional = true }
 chrono-tz = { version = "0.5.1", optional = true }
 
@@ -59,5 +63,6 @@ members = [
     "async-graphql-actix-web",
     "async-graphql-warp",
     "async-graphql-tide",
-    "async-graphql-lambda",
+#    "async-graphql-lambda",
+    "benchmark",
 ]

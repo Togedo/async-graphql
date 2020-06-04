@@ -1,5 +1,7 @@
-use crate::utils::{get_rustdoc, parse_guards, parse_validator};
-use async_graphql_parser::{parse_value, ParsedValue};
+use crate::utils::{
+    get_rustdoc, parse_default, parse_default_with, parse_guards, parse_post_guards,
+    parse_validator,
+};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Attribute, AttributeArgs, Error, Lit, Meta, MetaList, NestedMeta, Result, Type};
@@ -126,7 +128,7 @@ impl Object {
 pub struct Argument {
     pub name: Option<String>,
     pub desc: Option<String>,
-    pub default: Option<ParsedValue>,
+    pub default: Option<TokenStream>,
     pub validator: TokenStream,
 }
 
@@ -141,7 +143,11 @@ impl Argument {
             match attr.parse_meta()? {
                 Meta::List(ls) if ls.path.is_ident("arg") => {
                     for meta in &ls.nested {
-                        if let NestedMeta::Meta(Meta::NameValue(nv)) = meta {
+                        if let NestedMeta::Meta(Meta::Path(p)) = meta {
+                            if p.is_ident("default") {
+                                default = Some(quote! { Default::default() });
+                            }
+                        } else if let NestedMeta::Meta(Meta::NameValue(nv)) = meta {
                             if nv.path.is_ident("name") {
                                 if let syn::Lit::Str(lit) = &nv.lit {
                                     name = Some(lit.value());
@@ -161,22 +167,9 @@ impl Argument {
                                     ));
                                 }
                             } else if nv.path.is_ident("default") {
-                                if let syn::Lit::Str(lit) = &nv.lit {
-                                    match parse_value(&lit.value()) {
-                                        Ok(value) => default = Some(value),
-                                        Err(err) => {
-                                            return Err(Error::new_spanned(
-                                                &nv.lit,
-                                                format!("Invalid value: {}", err),
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    return Err(Error::new_spanned(
-                                        &nv.lit,
-                                        "Attribute 'default' should be a string.",
-                                    ));
-                                }
+                                default = Some(parse_default(&nv.lit)?);
+                            } else if nv.path.is_ident("default_with") {
+                                default = Some(parse_default_with(&nv.lit)?);
                             }
                         }
                     }
@@ -206,6 +199,7 @@ pub struct Field {
     pub requires: Option<String>,
     pub is_ref: bool,
     pub guard: Option<TokenStream>,
+    pub post_guard: Option<TokenStream>,
 }
 
 impl Field {
@@ -219,11 +213,13 @@ impl Field {
         let mut requires = None;
         let mut is_ref = false;
         let mut guard = None;
+        let mut post_guard = None;
 
         for attr in attrs {
             match attr.parse_meta()? {
                 Meta::List(ls) if ls.path.is_ident("field") => {
                     guard = parse_guards(crate_name, &ls)?;
+                    post_guard = parse_post_guards(crate_name, &ls)?;
                     for meta in &ls.nested {
                         match meta {
                             NestedMeta::Meta(Meta::Path(p)) if p.is_ident("skip") => {
@@ -310,6 +306,7 @@ impl Field {
             requires,
             is_ref,
             guard,
+            post_guard,
         }))
     }
 }
@@ -430,7 +427,7 @@ impl EnumItem {
 pub struct InputField {
     pub name: Option<String>,
     pub desc: Option<String>,
-    pub default: Option<ParsedValue>,
+    pub default: Option<TokenStream>,
     pub validator: TokenStream,
 }
 
@@ -452,6 +449,9 @@ impl InputField {
                                     "Fields on InputObject are not allowed to be skipped",
                                 ));
                             }
+                            NestedMeta::Meta(Meta::Path(p)) if p.is_ident("default") => {
+                                default = Some(quote! { Default::default() });
+                            }
                             NestedMeta::Meta(Meta::NameValue(nv)) => {
                                 if nv.path.is_ident("name") {
                                     if let syn::Lit::Str(lit) = &nv.lit {
@@ -472,22 +472,9 @@ impl InputField {
                                         ));
                                     }
                                 } else if nv.path.is_ident("default") {
-                                    if let syn::Lit::Str(lit) = &nv.lit {
-                                        match parse_value(&lit.value()) {
-                                            Ok(value) => default = Some(value),
-                                            Err(err) => {
-                                                return Err(Error::new_spanned(
-                                                    &lit,
-                                                    format!("Invalid value: {}", err),
-                                                ));
-                                            }
-                                        }
-                                    } else {
-                                        return Err(Error::new_spanned(
-                                            &nv.lit,
-                                            "Attribute 'default' should be a string.",
-                                        ));
-                                    }
+                                    default = Some(parse_default(&nv.lit)?);
+                                } else if nv.path.is_ident("default_with") {
+                                    default = Some(parse_default_with(&nv.lit)?);
                                 }
                             }
                             _ => {}
@@ -566,7 +553,7 @@ pub struct InterfaceFieldArgument {
     pub name: String,
     pub desc: Option<String>,
     pub ty: Type,
-    pub default: Option<ParsedValue>,
+    pub default: Option<TokenStream>,
 }
 
 impl InterfaceFieldArgument {
@@ -577,7 +564,11 @@ impl InterfaceFieldArgument {
         let mut default = None;
 
         for meta in &ls.nested {
-            if let NestedMeta::Meta(Meta::NameValue(nv)) = meta {
+            if let NestedMeta::Meta(Meta::Path(p)) = meta {
+                if p.is_ident("default") {
+                    default = Some(quote! { Default::default() });
+                }
+            } else if let NestedMeta::Meta(Meta::NameValue(nv)) = meta {
                 if nv.path.is_ident("name") {
                     if let syn::Lit::Str(lit) = &nv.lit {
                         name = Some(lit.value());
@@ -610,22 +601,9 @@ impl InterfaceFieldArgument {
                         ));
                     }
                 } else if nv.path.is_ident("default") {
-                    if let syn::Lit::Str(lit) = &nv.lit {
-                        match parse_value(&lit.value()) {
-                            Ok(value) => default = Some(value),
-                            Err(err) => {
-                                return Err(Error::new_spanned(
-                                    &nv.lit,
-                                    format!("Invalid value: {}", err),
-                                ));
-                            }
-                        }
-                    } else {
-                        return Err(Error::new_spanned(
-                            &nv.lit,
-                            "Attribute 'default' should be a string.",
-                        ));
-                    }
+                    default = Some(parse_default(&nv.lit)?);
+                } else if nv.path.is_ident("default_with") {
+                    default = Some(parse_default_with(&nv.lit)?);
                 }
             }
         }
@@ -649,6 +627,7 @@ impl InterfaceFieldArgument {
 
 pub struct InterfaceField {
     pub name: String,
+    pub method: Option<String>,
     pub desc: Option<String>,
     pub ty: Type,
     pub args: Vec<InterfaceFieldArgument>,
@@ -661,6 +640,7 @@ pub struct InterfaceField {
 impl InterfaceField {
     pub fn parse(ls: &MetaList) -> Result<Self> {
         let mut name = None;
+        let mut method = None;
         let mut desc = None;
         let mut ty = None;
         let mut args = Vec::new();
@@ -682,6 +662,15 @@ impl InterfaceField {
                             return Err(Error::new_spanned(
                                 &nv.lit,
                                 "Attribute 'name' should be a string.",
+                            ));
+                        }
+                    } else if nv.path.is_ident("method") {
+                        if let syn::Lit::Str(lit) = &nv.lit {
+                            method = Some(lit.value());
+                        } else {
+                            return Err(Error::new_spanned(
+                                &nv.lit,
+                                "Attribute 'method' should be a string.",
                             ));
                         }
                     } else if nv.path.is_ident("desc") {
@@ -752,6 +741,7 @@ impl InterfaceField {
 
         Ok(Self {
             name: name.unwrap(),
+            method,
             desc,
             ty: ty.unwrap(),
             args,
@@ -848,39 +838,67 @@ impl DataSource {
 
 pub struct Scalar {
     pub internal: bool,
+    pub name: Option<String>,
+    pub desc: Option<String>,
 }
 
 impl Scalar {
     pub fn parse(args: AttributeArgs) -> Result<Self> {
         let mut internal = false;
+        let mut name = None;
+        let mut desc = None;
 
         for arg in args {
             match arg {
-                NestedMeta::Meta(Meta::Path(p)) if p.is_ident("internal") => {
-                    internal = true;
+                NestedMeta::Meta(Meta::Path(p)) => {
+                    if p.is_ident("internal") {
+                        internal = true;
+                    }
+                }
+                NestedMeta::Meta(Meta::NameValue(nv)) => {
+                    if nv.path.is_ident("name") {
+                        if let syn::Lit::Str(lit) = nv.lit {
+                            name = Some(lit.value());
+                        } else {
+                            return Err(Error::new_spanned(
+                                &nv.lit,
+                                "Attribute 'name' should be a string.",
+                            ));
+                        }
+                    } else if nv.path.is_ident("desc") {
+                        if let syn::Lit::Str(lit) = nv.lit {
+                            desc = Some(lit.value());
+                        } else {
+                            return Err(Error::new_spanned(
+                                &nv.lit,
+                                "Attribute 'desc' should be a string.",
+                            ));
+                        }
+                    }
                 }
                 _ => {}
             }
         }
 
-        Ok(Self { internal })
+        Ok(Self {
+            internal,
+            name,
+            desc,
+        })
     }
 }
 
-pub struct Entity {
-    pub guard: Option<TokenStream>,
-}
+pub struct Entity {}
 
 impl Entity {
-    pub fn parse(crate_name: &TokenStream, attrs: &[Attribute]) -> Result<Option<Self>> {
+    pub fn parse(_crate_name: &TokenStream, attrs: &[Attribute]) -> Result<Option<Self>> {
         for attr in attrs {
             match attr.parse_meta()? {
                 Meta::List(ls) if ls.path.is_ident("entity") => {
-                    let guard = parse_guards(crate_name, &ls)?;
-                    return Ok(Some(Self { guard }));
+                    return Ok(Some(Self {}));
                 }
                 Meta::Path(p) if p.is_ident("entity") => {
-                    return Ok(Some(Self { guard: None }));
+                    return Ok(Some(Self {}));
                 }
                 _ => {}
             }

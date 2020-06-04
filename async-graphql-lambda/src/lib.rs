@@ -1,3 +1,7 @@
+//! Async-graphql integration with AWS lambda
+//!
+#![forbid(unsafe_code)]
+
 use async_graphql::{IntoQueryBuilder, IntoQueryBuilderOpts, ParseRequestError, QueryBuilder};
 use futures::io::AllowStdIo;
 use lambda_http::Request;
@@ -25,12 +29,11 @@ impl GQLRequestExt for Request {
         &self,
         opts: IntoQueryBuilderOpts,
     ) -> Result<QueryBuilder, ParseRequestError> {
-        let body = self.body().as_ref();
         let ct = self
             .headers()
             .get("content-type")
             .and_then(|value| value.to_str().ok());
-        (ct, AllowStdIo::new(Cursor::new(body)))
+        (ct, AllowStdIo::new(Cursor::new(self.body().to_vec())))
             .into_query_builder_opts(&opts)
             .await
     }

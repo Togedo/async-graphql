@@ -41,8 +41,8 @@ impl<'a> __Type<'a> {
 }
 
 /// The fundamental unit of any GraphQL Schema is the type. There are many kinds of types in GraphQL as represented by the `__TypeKind` enum.
-//
-// Depending on the kind of a type, certain fields describe information about that type. Scalar types provide no information beyond a name and description, while Enum types provide their values. Object and Interface types provide the fields they describe. Abstract types, Union and Interface, provide the Object types possible at runtime. List and NonNull types compose other types.
+///
+/// Depending on the kind of a type, certain fields describe information about that type. Scalar types provide no information beyond a name and description, while Enum types provide their values. Object and Interface types provide the fields they describe. Abstract types, Union and Interface, provide the Object types possible at runtime. List and NonNull types compose other types.
 #[Object(internal)]
 impl<'a> __Type<'a> {
     async fn kind(&self) -> __TypeKind {
@@ -93,11 +93,11 @@ impl<'a> __Type<'a> {
 
     async fn fields(
         &self,
-        #[arg(default = "false")] include_deprecated: bool,
+        #[arg(default = false)] include_deprecated: bool,
     ) -> Option<Vec<__Field<'a>>> {
         if let TypeDetail::Named(ty) = &self.detail {
-            ty.fields().and_then(|fields| {
-                let mut fields = fields
+            ty.fields().map(|fields| {
+                fields
                     .values()
                     .filter(|field| {
                         (include_deprecated || field.deprecation.is_none())
@@ -107,9 +107,7 @@ impl<'a> __Type<'a> {
                         registry: self.registry,
                         field,
                     })
-                    .collect_vec();
-                fields.sort_by(|a, b| a.field.name.cmp(&b.field.name));
-                Some(fields)
+                    .collect_vec()
             })
         } else {
             None
@@ -158,7 +156,7 @@ impl<'a> __Type<'a> {
 
     async fn enum_values(
         &self,
-        #[arg(default = "false")] include_deprecated: bool,
+        #[arg(default = false)] include_deprecated: bool,
     ) -> Option<Vec<__EnumValue<'a>>> {
         if let TypeDetail::Named(registry::MetaType::Enum { enum_values, .. }) = &self.detail {
             Some(

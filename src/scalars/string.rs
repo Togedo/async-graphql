@@ -1,26 +1,17 @@
-use crate::parser::Pos;
 use crate::{
-    registry, ContextSelectionSet, InputValueError, InputValueResult, OutputValueType, Result,
-    ScalarType, Type, Value,
+    registry, ContextSelectionSet, InputValueError, InputValueResult, OutputValueType, Positioned,
+    Result, ScalarType, Type, Value,
 };
 use async_graphql_derive::Scalar;
+use async_graphql_parser::query::Field;
 use std::borrow::Cow;
 
-const STRING_DESC: &str = "The `String` scalar type represents textual data, represented as UTF-8 character sequences. The String type is most often used by GraphQL to represent free-form human-readable text.";
-
+/// The `String` scalar type represents textual data, represented as UTF-8 character sequences. The String type is most often used by GraphQL to represent free-form human-readable text.
 #[Scalar(internal)]
 impl ScalarType for String {
-    fn type_name() -> &'static str {
-        "String"
-    }
-
-    fn description() -> Option<&'static str> {
-        Some(STRING_DESC)
-    }
-
     fn parse(value: Value) -> InputValueResult<Self> {
         match value {
-            Value::String(s) => Ok(s.into_owned()),
+            Value::String(s) => Ok(s),
             _ => Err(InputValueError::ExpectedType(value)),
         }
     }
@@ -32,8 +23,8 @@ impl ScalarType for String {
         }
     }
 
-    fn to_json(&self) -> Result<serde_json::Value> {
-        Ok(self.clone().into())
+    fn to_value(&self) -> Value {
+        Value::String(self.clone())
     }
 }
 
@@ -43,20 +34,17 @@ impl<'a> Type for &'a str {
     }
 
     fn create_type_info(registry: &mut registry::Registry) -> String {
-        registry.create_type::<Self, _>(|_| registry::MetaType::Scalar {
-            name: Self::type_name().to_string(),
-            description: Some(STRING_DESC),
-            is_valid: |value| match value {
-                Value::String(_) => true,
-                _ => false,
-            },
-        })
+        <String as Type>::create_type_info(registry)
     }
 }
 
 #[async_trait::async_trait]
 impl<'a> OutputValueType for &'a str {
-    async fn resolve(&self, _: &ContextSelectionSet<'_>, _pos: Pos) -> Result<serde_json::Value> {
+    async fn resolve(
+        &self,
+        _: &ContextSelectionSet<'_>,
+        _field: &Positioned<Field>,
+    ) -> Result<serde_json::Value> {
         Ok((*self).into())
     }
 }

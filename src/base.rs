@@ -1,9 +1,9 @@
-use crate::parser::Pos;
 use crate::registry::Registry;
 use crate::{
-    registry, Context, ContextSelectionSet, FieldResult, InputValueResult, QueryError, Result,
-    Value, ID,
+    registry, Context, ContextSelectionSet, FieldResult, InputValueResult, Positioned, QueryError,
+    Result, Value,
 };
+use async_graphql_parser::query::Field;
 use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
@@ -30,36 +30,26 @@ pub trait Type {
 
     /// Create type information in the registry and return qualified typename.
     fn create_type_info(registry: &mut registry::Registry) -> String;
-
-    /// Returns a `GlobalID` that is unique among all types.
-    fn global_id(id: ID) -> ID {
-        base64::encode(format!("{}:{}", Self::type_name(), *id)).into()
-    }
-
-    /// Parse `GlobalID`.
-    fn from_global_id(id: ID) -> Option<ID> {
-        let v: Vec<&str> = id.splitn(2, ':').collect();
-        if v.len() != 2 {
-            return None;
-        }
-        if v[0] != Self::type_name() {
-            return None;
-        }
-        Some(v[1].to_string().into())
-    }
 }
 
 /// Represents a GraphQL input value
 pub trait InputValueType: Type + Sized {
-    /// Parse from `Value`
-    fn parse(value: Value) -> InputValueResult<Self>;
+    /// Parse from `Value`，None represent undefined.
+    fn parse(value: Option<Value>) -> InputValueResult<Self>;
+
+    /// Convert to `Value` for introspection
+    fn to_value(&self) -> Value;
 }
 
 /// Represents a GraphQL output value
 #[async_trait::async_trait]
 pub trait OutputValueType: Type {
     /// Resolve an output value to `serde_json::Value`.
-    async fn resolve(&self, ctx: &ContextSelectionSet<'_>, pos: Pos) -> Result<serde_json::Value>;
+    async fn resolve(
+        &self,
+        ctx: &ContextSelectionSet<'_>,
+        field: &Positioned<Field>,
+    ) -> Result<serde_json::Value>;
 }
 
 #[allow(missing_docs)]
@@ -90,6 +80,7 @@ pub trait ObjectType: OutputValueType {
     {
         if name == Self::type_name().as_ref()
             || ctx
+                .schema_env
                 .registry
                 .implements
                 .get(Self::type_name().as_ref())
@@ -124,10 +115,6 @@ pub trait InputObjectType: InputValueType {}
 ///
 /// #[Scalar]
 /// impl ScalarType for MyInt {
-///     fn type_name() -> &'static str {
-///         "MyInt"
-///     }
-///
 ///     fn parse(value: Value) -> InputValueResult<Self> {
 ///         if let Value::Int(n) = value {
 ///             Ok(MyInt(n as i32))
@@ -136,20 +123,12 @@ pub trait InputObjectType: InputValueType {}
 ///         }
 ///     }
 ///
-///     fn to_json(&self) -> Result<serde_json::Value> {
-///         Ok(self.0.into())
+///     fn to_value(&self) -> Value {
+///         Value::Int(self.0)
 ///     }
 /// }
 /// ```
 pub trait ScalarType: Sized + Send {
-    /// The type name of a scalar.
-    fn type_name() -> &'static str;
-
-    /// The description of a scalar.
-    fn description() -> Option<&'static str> {
-        None
-    }
-
     /// Parse a scalar value, return `Some(Self)` if successful, otherwise return `None`.
     fn parse(value: Value) -> InputValueResult<Self>;
 
@@ -160,8 +139,8 @@ pub trait ScalarType: Sized + Send {
         true
     }
 
-    /// Convert the scalar value to json value.
-    fn to_json(&self) -> Result<serde_json::Value>;
+    /// Convert the scalar to `Value`.
+    fn to_value(&self) -> Value;
 }
 
 impl<T: Type + Send + Sync> Type for &T {
@@ -177,8 +156,12 @@ impl<T: Type + Send + Sync> Type for &T {
 #[async_trait::async_trait]
 impl<T: OutputValueType + Send + Sync> OutputValueType for &T {
     #[allow(clippy::trivially_copy_pass_by_ref)]
-    async fn resolve(&self, ctx: &ContextSelectionSet<'_>, pos: Pos) -> Result<serde_json::Value> {
-        T::resolve(*self, ctx, pos).await
+    async fn resolve(
+        &self,
+        ctx: &ContextSelectionSet<'_>,
+        field: &Positioned<Field>,
+    ) -> Result<serde_json::Value> {
+        T::resolve(*self, ctx, field).await
     }
 }
 
@@ -196,8 +179,12 @@ impl<T: Type + Send + Sync> Type for Box<T> {
 impl<T: OutputValueType + Send + Sync> OutputValueType for Box<T> {
     #[allow(clippy::trivially_copy_pass_by_ref)]
     #[allow(clippy::borrowed_box)]
-    async fn resolve(&self, ctx: &ContextSelectionSet<'_>, pos: Pos) -> Result<serde_json::Value> {
-        T::resolve(&*self, ctx, pos).await
+    async fn resolve(
+        &self,
+        ctx: &ContextSelectionSet<'_>,
+        field: &Positioned<Field>,
+    ) -> Result<serde_json::Value> {
+        T::resolve(&*self, ctx, field).await
     }
 }
 
@@ -214,8 +201,12 @@ impl<T: Type + Send + Sync> Type for Arc<T> {
 #[async_trait::async_trait]
 impl<T: OutputValueType + Send + Sync> OutputValueType for Arc<T> {
     #[allow(clippy::trivially_copy_pass_by_ref)]
-    async fn resolve(&self, ctx: &ContextSelectionSet<'_>, pos: Pos) -> Result<serde_json::Value> {
-        T::resolve(&*self, ctx, pos).await
+    async fn resolve(
+        &self,
+        ctx: &ContextSelectionSet<'_>,
+        field: &Positioned<Field>,
+    ) -> Result<serde_json::Value> {
+        T::resolve(&*self, ctx, field).await
     }
 }
 
@@ -238,15 +229,15 @@ impl<T: OutputValueType + Sync> OutputValueType for FieldResult<T> {
     async fn resolve(
         &self,
         ctx: &ContextSelectionSet<'_>,
-        pos: Pos,
+        field: &Positioned<Field>,
     ) -> crate::Result<serde_json::Value> {
         match self {
-            Ok(value) => Ok(OutputValueType::resolve(value, ctx, pos).await?),
+            Ok(value) => Ok(OutputValueType::resolve(value, ctx, field).await?),
             Err(err) => Err(err.clone().into_error_with_path(
-                pos,
+                field.position(),
                 match &ctx.path_node {
                     Some(path) => path.to_json(),
-                    None => serde_json::Value::Null,
+                    None => Vec::new(),
                 },
             )),
         }

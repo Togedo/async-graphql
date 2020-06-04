@@ -14,11 +14,6 @@ struct StringNumber(i64);
 
 #[Scalar]
 impl ScalarType for StringNumber {
-    fn type_name() -> &'static str {
-        // 类型名
-        "StringNumber"
-    }
-
     fn parse(value: Value) -> InputValueResult<Self> {
         if let Value::String(value) = value {
             // 解析整数
@@ -29,8 +24,8 @@ impl ScalarType for StringNumber {
         }
     }
 
-    fn to_json(&self) -> Result<serde_json::Value> {
-        Ok(serde_json::to_value(self.0).unwrap())
+    fn to_value(&self) -> Value {
+        Value::String(self.0.to_string())
     }
 }
 

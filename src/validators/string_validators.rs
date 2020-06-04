@@ -6,15 +6,15 @@ use regex::Regex;
 /// String minimum length validator
 pub struct StringMinLength {
     /// Must be greater than or equal to this value.
-    pub length: usize,
+    pub length: i32,
 }
 
 impl InputValueValidator for StringMinLength {
     fn is_valid(&self, value: &Value) -> Option<String> {
         if let Value::String(s) = value {
-            if s.len() < self.length {
+            if s.len() < self.length as usize {
                 Some(format!(
-                    "the value length is {}, but the length must be greater than or equal to {}",
+                    "the value length is {}, must be greater than or equal to {}",
                     s.len(),
                     self.length
                 ))
@@ -30,15 +30,15 @@ impl InputValueValidator for StringMinLength {
 /// String maximum length validator
 pub struct StringMaxLength {
     /// Must be less than or equal to this value.
-    pub length: usize,
+    pub length: i32,
 }
 
 impl InputValueValidator for StringMaxLength {
     fn is_valid(&self, value: &Value) -> Option<String> {
         if let Value::String(s) = value {
-            if s.len() > self.length {
+            if s.len() > self.length as usize {
                 Some(format!(
-                    "the value length is {}, but the length must be less than or equal to {}",
+                    "the value length is {}, must be less than or equal to {}",
                     s.len(),
                     self.length
                 ))
@@ -88,12 +88,12 @@ impl InputValueValidator for MAC {
         if let Value::String(s) = value {
             if self.colon {
                 if !MAC_ADDRESS_RE.is_match(s) {
-                    Some("invalid email format".to_string())
+                    Some("invalid MAC format".to_string())
                 } else {
                     None
                 }
             } else if !MAC_ADDRESS_NO_COLON_RE.is_match(s) {
-                Some("invalid email format".to_string())
+                Some("invalid MAC format".to_string())
             } else {
                 None
             }

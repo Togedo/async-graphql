@@ -3,25 +3,30 @@
 #![warn(missing_docs)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::needless_doctest_main)]
+#![forbid(unsafe_code)]
 
-use async_graphql::http::StreamBody;
+use async_graphql::http::{multipart_stream, GQLRequest, StreamBody};
 use async_graphql::{
-    Data, FieldResult, IntoQueryBuilder, IntoQueryBuilderOpts, ObjectType, QueryBuilder, Schema,
-    SubscriptionType, WebSocketTransport,
+    Data, FieldResult, IntoQueryBuilder, IntoQueryBuilderOpts, ObjectType, QueryBuilder,
+    QueryResponse, Schema, StreamResponse, SubscriptionType, WebSocketTransport,
 };
 use bytes::Bytes;
 use futures::select;
 use futures::{SinkExt, StreamExt};
+use hyper::header::HeaderValue;
+use hyper::{Body, Method};
+use std::convert::Infallible;
 use std::sync::Arc;
 use warp::filters::ws::Message;
 use warp::filters::BoxedFilter;
 use warp::reject::Reject;
+use warp::reply::Response;
 use warp::{Filter, Rejection, Reply};
 
 /// Bad request error
 ///
 /// It's a wrapper of `async_graphql::ParseRequestError`.
-pub struct BadRequest(pub async_graphql::ParseRequestError);
+pub struct BadRequest(pub anyhow::Error);
 
 impl std::fmt::Debug for BadRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,9 +46,9 @@ impl Reject for BadRequest {}
 /// ```no_run
 ///
 /// use async_graphql::*;
-/// use warp::{Filter, Reply};
+/// use async_graphql_warp::*;
+/// use warp::Filter;
 /// use std::convert::Infallible;
-/// use async_graphql::http::GQLResponse;
 ///
 /// struct QueryRoot;
 ///
@@ -59,8 +64,7 @@ impl Reject for BadRequest {}
 /// async fn main() {
 ///     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
 ///     let filter = async_graphql_warp::graphql(schema).and_then(|(schema, builder): (_, QueryBuilder)| async move {
-///         let resp = builder.execute(&schema).await;
-///         Ok::<_, Infallible>(warp::reply::json(&GQLResponse(resp)).into_response())
+///         Ok::<_, Infallible>(GQLResponse::from(builder.execute(&schema).await))
 ///     });
 ///     warp::serve(filter).run(([0, 0, 0, 0], 8000)).await;
 /// }
@@ -73,19 +77,7 @@ where
     Mutation: ObjectType + Send + Sync + 'static,
     Subscription: SubscriptionType + Send + Sync + 'static,
 {
-    warp::any()
-        .and(warp::post())
-        .and(warp::header::optional::<String>("content-type"))
-        .and(warp::body::stream())
-        .and(warp::any().map(move || schema.clone()))
-        .and_then(|content_type, body, schema| async move {
-            let builder = (content_type, StreamBody::new(body))
-                .into_query_builder()
-                .await
-                .map_err(|err| warp::reject::custom(BadRequest(err)))?;
-            Ok::<_, Rejection>((schema, builder))
-        })
-        .boxed()
+    graphql_opts(schema, Default::default())
 }
 
 /// Similar to graphql, but you can set the options `IntoQueryBuilderOpts`.
@@ -100,18 +92,29 @@ where
 {
     let opts = Arc::new(opts);
     warp::any()
-        .and(warp::post())
+        .and(warp::method())
+        .and(warp::query::raw())
         .and(warp::header::optional::<String>("content-type"))
         .and(warp::body::stream())
         .and(warp::any().map(move || opts.clone()))
         .and(warp::any().map(move || schema.clone()))
         .and_then(
-            |content_type, body, opts: Arc<IntoQueryBuilderOpts>, schema| async move {
-                let builder = (content_type, StreamBody::new(body))
-                    .into_query_builder_opts(&opts)
-                    .await
-                    .map_err(|err| warp::reject::custom(BadRequest(err)))?;
-                Ok::<_, Rejection>((schema, builder))
+            |method, query: String, content_type, body, opts: Arc<IntoQueryBuilderOpts>, schema| async move {
+                if method == Method::GET {
+                    let gql_request: GQLRequest = serde_urlencoded::from_str(&query)
+                        .map_err(|err| warp::reject::custom(BadRequest(err.into())))?;
+                    let builder = gql_request
+                        .into_query_builder_opts(&opts)
+                        .await
+                        .map_err(|err| warp::reject::custom(BadRequest(err.into())))?;
+                    Ok::<_, Rejection>((schema, builder))
+                } else {
+                    let builder = (content_type, StreamBody::new(body))
+                        .into_query_builder_opts(&opts)
+                        .await
+                        .map_err(|err| warp::reject::custom(BadRequest(err.into())))?;
+                    Ok::<_, Rejection>((schema, builder))
+                }
             },
         )
         .boxed()
@@ -123,6 +126,7 @@ where
 ///
 /// ```no_run
 /// use async_graphql::*;
+/// use async_graphql_warp::*;
 /// use warp::Filter;
 /// use futures::{Stream, StreamExt};
 /// use std::time::Duration;
@@ -175,14 +179,11 @@ where
                             select! {
                                 bytes = srx.next() => {
                                     if let Some(bytes) = bytes {
-                                        if tx
-                                            .send(Message::text(unsafe {
-                                                String::from_utf8_unchecked(bytes.to_vec())
-                                            }))
-                                            .await
-                                            .is_err()
-                                        {
-                                            return;
+                                        if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                                            if tx.send(Message::text(text)).await.is_err()
+                                            {
+                                                return;
+                                            }
                                         }
                                     } else {
                                         return;
@@ -203,8 +204,8 @@ where
                 })
             },
         ).map(|reply| {
-            warp::reply::with_header(reply, "Sec-WebSocket-Protocol", "graphql-ws")
-        })
+        warp::reply::with_header(reply, "Sec-WebSocket-Protocol", "graphql-ws")
+    })
         .boxed()
 }
 
@@ -240,14 +241,10 @@ where
                             select! {
                                 bytes = srx.next() => {
                                     if let Some(bytes) = bytes {
-                                        if tx
-                                            .send(Message::text(unsafe {
-                                                String::from_utf8_unchecked(bytes.to_vec())
-                                            }))
-                                            .await
-                                            .is_err()
-                                        {
-                                            return;
+                                        if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+                                            if tx.send(Message::text(text)).await.is_err() {
+                                                return;
+                                            }
                                         }
                                     } else {
                                         return;
@@ -271,4 +268,64 @@ where
         warp::reply::with_header(reply, "Sec-WebSocket-Protocol", "graphql-ws")
     })
         .boxed()
+}
+
+/// GraphQL reply
+pub struct GQLResponse(async_graphql::Result<QueryResponse>);
+
+impl From<async_graphql::Result<QueryResponse>> for GQLResponse {
+    fn from(resp: async_graphql::Result<QueryResponse>) -> Self {
+        GQLResponse(resp)
+    }
+}
+
+fn add_cache_control(http_resp: &mut Response, resp: &async_graphql::Result<QueryResponse>) {
+    if let Ok(QueryResponse { cache_control, .. }) = resp {
+        if let Some(cache_control) = cache_control.value() {
+            if let Ok(value) = cache_control.parse() {
+                http_resp.headers_mut().insert("cache-control", value);
+            }
+        }
+    }
+}
+
+impl Reply for GQLResponse {
+    fn into_response(self) -> Response {
+        let gql_resp = async_graphql::http::GQLResponse(self.0);
+        let mut resp = warp::reply::with_header(
+            warp::reply::json(&gql_resp),
+            "content-type",
+            "application/json",
+        )
+        .into_response();
+        add_cache_control(&mut resp, &gql_resp.0);
+        resp
+    }
+}
+
+/// GraphQL streaming reply
+pub struct GQLResponseStream(StreamResponse);
+
+impl From<StreamResponse> for GQLResponseStream {
+    fn from(resp: StreamResponse) -> Self {
+        GQLResponseStream(resp)
+    }
+}
+
+impl Reply for GQLResponseStream {
+    fn into_response(self) -> Response {
+        match self.0 {
+            StreamResponse::Single(resp) => GQLResponse(resp).into_response(),
+            StreamResponse::Stream(stream) => {
+                let mut resp = Response::new(Body::wrap_stream(
+                    multipart_stream(stream).map(Result::<_, Infallible>::Ok),
+                ));
+                resp.headers_mut().insert(
+                    "content-type",
+                    HeaderValue::from_static("multipart/mixed; boundary=\"-\""),
+                );
+                resp
+            }
+        }
+    }
 }

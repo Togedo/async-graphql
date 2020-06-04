@@ -59,10 +59,14 @@ impl FieldError {
     }
 
     #[doc(hidden)]
-    pub fn into_error_with_path(self, pos: Pos, path: serde_json::Value) -> Error {
+    pub fn into_error_with_path(self, pos: Pos, path: Vec<serde_json::Value>) -> Error {
         Error::Query {
             pos,
-            path: Some(path),
+            path: if !path.is_empty() {
+                Some(path.into())
+            } else {
+                None
+            },
             err: QueryError::FieldError {
                 err: self.0,
                 extended_error: self.1,
@@ -303,7 +307,7 @@ pub enum ParseRequestError {
     InvalidFilesMap(serde_json::Error),
 
     #[error("Invalid multipart data")]
-    InvalidMultipart,
+    InvalidMultipart(multer::Error),
 
     #[error("Missing \"operators\" part")]
     MissingOperatorsPart,
@@ -317,13 +321,11 @@ pub enum ParseRequestError {
     #[error("Missing files")]
     MissingFiles,
 
-    #[error("Too many files")]
-    TooManyFiles,
-
-    #[error("The file size is too large")]
-    TooLarge,
+    #[error("Payload too large")]
+    PayloadTooLarge,
 }
 
+#[allow(missing_docs)]
 #[derive(Debug, PartialEq)]
 pub struct RuleError {
     pub locations: Vec<Pos>,

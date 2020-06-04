@@ -88,7 +88,7 @@ impl<'a> Visitor<'a> for NoUndefinedVariables<'a> {
         _ctx: &mut VisitorContext<'a>,
         fragment_definition: &'a Positioned<FragmentDefinition>,
     ) {
-        self.current_scope = Some(Scope::Fragment(fragment_definition.name.node));
+        self.current_scope = Some(Scope::Fragment(fragment_definition.name.as_str()));
     }
 
     fn enter_variable_definition(
@@ -98,7 +98,7 @@ impl<'a> Visitor<'a> for NoUndefinedVariables<'a> {
     ) {
         if let Some(Scope::Operation(ref name)) = self.current_scope {
             if let Some(&mut (_, ref mut vars)) = self.defined_variables.get_mut(name) {
-                vars.insert(variable_definition.name.node);
+                vars.insert(variable_definition.name.as_str());
             }
         }
     }
@@ -106,7 +106,7 @@ impl<'a> Visitor<'a> for NoUndefinedVariables<'a> {
     fn enter_argument(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
-        name: &'a Positioned<&str>,
+        name: &'a Positioned<String>,
         value: &'a Positioned<Value>,
     ) {
         if let Some(ref scope) = self.current_scope {
@@ -130,7 +130,7 @@ impl<'a> Visitor<'a> for NoUndefinedVariables<'a> {
             self.spreads
                 .entry(scope.clone())
                 .or_insert_with(Vec::new)
-                .push(fragment_spread.fragment_name.node);
+                .push(fragment_spread.fragment_name.as_str());
         }
     }
 }
@@ -138,7 +138,7 @@ impl<'a> Visitor<'a> for NoUndefinedVariables<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::validation::test_harness::{expect_fails_rule, expect_passes_rule};
+    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory<'a>() -> NoUndefinedVariables<'a> {
         NoUndefinedVariables::default()
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn all_variables_defined() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo($a: String, $b: String, $c: String) {
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn all_variables_deeply_defined() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo($a: String, $b: String, $c: String) {
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn all_variables_deeply_defined_in_inline_fragments_defined() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo($a: String, $b: String, $c: String) {
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn all_variables_in_fragments_deeply_defined() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo($a: String, $b: String, $c: String) {
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn variable_within_single_fragment_defined_in_multiple_operations() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo($a: String) {
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn variable_within_fragments_defined_in_operations() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo($a: String) {
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn variable_within_recursive_fragment_defined() {
-        expect_passes_rule(
+        expect_passes_rule!(
             factory,
             r#"
           query Foo($a: String) {
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn variable_not_defined() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($a: String, $b: String, $c: String) {
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn variable_not_defined_by_unnamed_query() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           {
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn multiple_variables_not_defined() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($b: String) {
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn variable_in_fragment_not_defined_by_unnamed_query() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           {
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn variable_in_fragment_not_defined_by_operation() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($a: String, $b: String) {
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn multiple_variables_in_fragments_not_defined() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($b: String) {
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn single_variable_in_fragment_not_defined_by_multiple_operations() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($a: String) {
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn variables_in_fragment_not_defined_by_multiple_operations() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($b: String) {
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn variable_in_fragment_used_by_other_operation() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($b: String) {
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn multiple_undefined_variables_produce_multiple_errors() {
-        expect_fails_rule(
+        expect_fails_rule!(
             factory,
             r#"
           query Foo($b: String) {
