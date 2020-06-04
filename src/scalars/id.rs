@@ -9,7 +9,7 @@ use std::ops::{Deref, DerefMut};
 /// ID scalar
 ///
 /// The input is a `&str`, `String`, `usize` or `uuid::UUID`, and the output is a string.
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
 pub struct ID(String);
 
 impl Deref for ID {

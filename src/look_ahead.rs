@@ -1,9 +1,10 @@
 use async_graphql_parser::query::{Document, Field, Selection, SelectionSet};
 
 /// A selection performed by a query
+#[derive(Debug)]
 pub struct Lookahead<'a> {
     pub(crate) document: &'a Document,
-    pub(crate) field: Option<&'a Field>,
+    pub field: Option<&'a Field>,
 }
 
 impl<'a> Lookahead<'a> {
