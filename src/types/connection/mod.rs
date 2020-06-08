@@ -248,12 +248,12 @@ pub async fn query<Cursor, Node, ConnectionFields, EdgeFields, F, R>(
     before: Option<String>,
     first: Option<i32>,
     last: Option<i32>,
-    mut f: F,
+    f: F,
 ) -> FieldResult<Connection<Cursor, Node, ConnectionFields, EdgeFields>>
 where
     Cursor: CursorType + Send + Sync,
     <Cursor as CursorType>::Error: Display + Send + Sync + 'static,
-    F: FnMut(Option<Cursor>, Option<Cursor>, Option<usize>, Option<usize>) -> R,
+    F: FnOnce(Option<Cursor>, Option<Cursor>, Option<usize>, Option<usize>) -> R,
     R: Future<Output = FieldResult<Connection<Cursor, Node, ConnectionFields, EdgeFields>>>,
 {
     if first.is_some() && last.is_some() {

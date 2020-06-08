@@ -1,8 +1,15 @@
+use std::collections::HashMap;
+
 /// Generate the page for GraphQL Playground
-pub fn playground_source(
-    graphql_endpoint_url: &str,
-    subscription_endpoint: Option<&str>,
-) -> String {
+///
+/// # Example
+///
+/// ```rust
+/// use async_graphql::http::*;
+///
+/// playground_source(GraphQLPlaygroundConfig::new("http://localhost:8000"));
+/// ```
+pub fn playground_source(config: GraphQLPlaygroundConfig) -> String {
     r##"
 <!DOCTYPE html>
 
@@ -537,14 +544,51 @@ pub fn playground_source(
       const root = document.getElementById('root');
       root.classList.add('playgroundIn');
 
-      GraphQLPlayground.init(root, { endpoint: GRAPHQL_URL, subscriptionEndpoint: GRAPHQL_SUBSCRIPTION_URL })
+      GraphQLPlayground.init(root, GRAPHQL_PLAYGROUND_CONFIG)
     })
   </script>
 </body>
 </html>
-  "##.replace("GRAPHQL_URL", &format!("'{}'", graphql_endpoint_url))
-        .replace("GRAPHQL_SUBSCRIPTION_URL", &match subscription_endpoint {
-            Some(url) => format!("'{}'", url),
-            None => "null".to_string()
+  "##.replace("GRAPHQL_PLAYGROUND_CONFIG", &match serde_json::to_string(&config) {
+            Ok(str) => str,
+            _ => "{}".to_string()
         })
+}
+
+/// Config for GraphQL Playground
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphQLPlaygroundConfig<'a> {
+    endpoint: &'a str,
+    subscription_endpoint: Option<&'a str>,
+    headers: Option<HashMap<&'a str, &'a str>>,
+}
+
+impl<'a> GraphQLPlaygroundConfig<'a> {
+    /// Create a config for GraphQL playground.
+    pub fn new(endpoint: &'a str) -> Self {
+        Self {
+            endpoint,
+            subscription_endpoint: None,
+            headers: Default::default(),
+        }
+    }
+
+    /// Set subscription endpoint, for example: `ws://localhost:8000`.
+    pub fn subscription_endpoint(mut self, endpoint: &'a str) -> Self {
+        self.subscription_endpoint = Some(endpoint);
+        self
+    }
+
+    /// Set HTTP header for per query.
+    pub fn with_header(mut self, name: &'a str, value: &'a str) -> Self {
+        if let Some(headers) = &mut self.headers {
+            headers.insert(name, value);
+        } else {
+            let mut headers = HashMap::new();
+            headers.insert(name, value);
+            self.headers = Some(headers);
+        }
+        self
+    }
 }

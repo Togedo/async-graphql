@@ -10,7 +10,7 @@ use itertools::Itertools;
 
 pub use graphiql_source::graphiql_source;
 pub use multipart_stream::multipart_stream;
-pub use playground_source::playground_source;
+pub use playground_source::{playground_source, GraphQLPlaygroundConfig};
 pub use stream_body::StreamBody;
 
 use crate::query::{IntoQueryBuilder, IntoQueryBuilderOpts};
@@ -61,6 +61,10 @@ impl Serialize for GQLResponse {
         match &self.0 {
             Ok(res) => {
                 let mut map = serializer.serialize_map(None)?;
+                if let Some(label) = &res.label {
+                    map.serialize_key("label")?;
+                    map.serialize_value(label)?;
+                }
                 if let Some(path) = &res.path {
                     map.serialize_key("path")?;
                     map.serialize_value(path)?;
@@ -215,6 +219,7 @@ mod tests {
     #[test]
     fn test_response_data() {
         let resp = GQLResponse(Ok(QueryResponse {
+            label: None,
             path: None,
             data: json!({"ok": true}),
             extensions: None,

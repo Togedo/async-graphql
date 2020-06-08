@@ -2,7 +2,6 @@ use proc_macro2::{Span, TokenStream};
 use proc_macro_crate::crate_name;
 use quote::quote;
 use syn::{Attribute, Error, Expr, Ident, Lit, Meta, MetaList, NestedMeta, Result};
-
 pub fn get_crate_name(internal: bool) -> TokenStream {
     if internal {
         quote! { crate }
@@ -12,32 +11,11 @@ pub fn get_crate_name(internal: bool) -> TokenStream {
         quote! { #id }
     }
 }
-
-pub fn check_reserved_name(name: &str, internal: bool) -> Result<()> {
-    if internal {
-        return Ok(());
-    }
-    if name.ends_with("Connection") {
-        Err(Error::new(
-            Span::call_site(),
-            "The name ending with 'Connection' is reserved",
-        ))
-    } else if name == "PageInfo" {
-        Err(Error::new(
-            Span::call_site(),
-            "The name 'PageInfo' is reserved",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 fn parse_nested_validator(
     crate_name: &TokenStream,
     nested_meta: &NestedMeta,
 ) -> Result<TokenStream> {
     let mut params = Vec::new();
-
     match nested_meta {
         NestedMeta::Meta(Meta::List(ls)) => {
             if ls.path.is_ident("and") {
@@ -94,7 +72,6 @@ fn parse_nested_validator(
         }
     }
 }
-
 pub fn parse_validator(crate_name: &TokenStream, args: &MetaList) -> Result<TokenStream> {
     for arg in &args.nested {
         if let NestedMeta::Meta(Meta::List(ls)) = arg {
@@ -116,13 +93,11 @@ pub fn parse_validator(crate_name: &TokenStream, args: &MetaList) -> Result<Toke
     }
     Ok(quote! {None})
 }
-
 pub fn parse_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Option<TokenStream>> {
     for arg in &args.nested {
         if let NestedMeta::Meta(Meta::List(ls)) = arg {
             if ls.path.is_ident("guard") {
                 let mut guards = None;
-
                 for item in &ls.nested {
                     if let NestedMeta::Meta(Meta::List(ls)) = item {
                         let ty = &ls.path;
@@ -149,7 +124,6 @@ pub fn parse_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Option<
                                 return Err(Error::new_spanned(attr, "Invalid property for guard"));
                             }
                         }
-
                         let guard = quote! { #ty { #(#params),* } };
                         if guards.is_none() {
                             guards = Some(guard);
@@ -161,21 +135,17 @@ pub fn parse_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Option<
                         return Err(Error::new_spanned(item, "Invalid guard"));
                     }
                 }
-
                 return Ok(guards);
             }
         }
     }
-
     Ok(None)
 }
-
 pub fn parse_post_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Option<TokenStream>> {
     for arg in &args.nested {
         if let NestedMeta::Meta(Meta::List(ls)) = arg {
             if ls.path.is_ident("post_guard") {
                 let mut guards = None;
-
                 for item in &ls.nested {
                     if let NestedMeta::Meta(Meta::List(ls)) = item {
                         let ty = &ls.path;
@@ -202,7 +172,6 @@ pub fn parse_post_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Op
                                 return Err(Error::new_spanned(attr, "Invalid property for guard"));
                             }
                         }
-
                         let guard = quote! { #ty { #(#params),* } };
                         if guards.is_none() {
                             guards = Some(guard);
@@ -215,15 +184,12 @@ pub fn parse_post_guards(crate_name: &TokenStream, args: &MetaList) -> Result<Op
                         return Err(Error::new_spanned(item, "Invalid guard"));
                     }
                 }
-
                 return Ok(guards);
             }
         }
     }
-
     Ok(None)
 }
-
 pub fn get_rustdoc(attrs: &[Attribute]) -> Result<Option<String>> {
     let mut full_docs = String::new();
     for attr in attrs {
@@ -247,7 +213,6 @@ pub fn get_rustdoc(attrs: &[Attribute]) -> Result<Option<String>> {
         Some(full_docs)
     })
 }
-
 pub fn parse_default(lit: &Lit) -> Result<TokenStream> {
     match lit {
         Lit::Str(value) =>{
@@ -272,7 +237,6 @@ pub fn parse_default(lit: &Lit) -> Result<TokenStream> {
         )),
     }
 }
-
 pub fn parse_default_with(lit: &Lit) -> Result<TokenStream> {
     if let Lit::Str(str) = lit {
         let str = str.value();
@@ -285,7 +249,32 @@ pub fn parse_default_with(lit: &Lit) -> Result<TokenStream> {
         ))
     }
 }
-
 pub fn get_param_getter_ident(name: &str) -> Ident {
     Ident::new(&format!("__{}_getter", name), Span::call_site())
+}
+pub fn feature_block(
+    crate_name: &TokenStream,
+    features: &[String],
+    field_name: &str,
+    block: TokenStream,
+) -> TokenStream {
+    if !features.is_empty() {
+        let error_message = format!(
+            "`{}` is only available if the features `{}` are enabled",
+            field_name,
+            features.join(",")
+        );
+        quote!({
+            #[cfg(not(all(#(feature = #features),*)))]
+            {
+                return Err(#crate_name::FieldError::from(#error_message)).map_err(std::convert::Into::into);
+            }
+            #[cfg(all(#(feature = #features),*))]
+            {
+                #block
+            }
+        })
+    } else {
+        block
+    }
 }

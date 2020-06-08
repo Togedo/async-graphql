@@ -1,6 +1,6 @@
 use crate::args;
 use crate::output_type::OutputType;
-use crate::utils::{check_reserved_name, get_crate_name, get_param_getter_ident, get_rustdoc};
+use crate::utils::{feature_block, get_crate_name, get_param_getter_ident, get_rustdoc};
 use inflector::Inflector;
 use proc_macro::TokenStream;
 use quote::quote;
@@ -29,7 +29,6 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
         .name
         .clone()
         .unwrap_or_else(|| self_name.clone());
-    check_reserved_name(&gql_typename, object_args.internal)?;
 
     let desc = object_args
         .desc
@@ -59,6 +58,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                     .as_ref()
                     .map(|s| quote! {Some(#s)})
                     .unwrap_or_else(|| quote! {None});
+                let features = field.features;
 
                 if method.sig.asyncness.is_none() {
                     return Err(Error::new_spanned(
@@ -205,6 +205,13 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                     .expect("invalid result type");
                 }
 
+                method.block =
+                    syn::parse2::<Block>(feature_block(&crate_name, &features, &field_name, {
+                        let block = &method.block;
+                        quote! { #block }
+                    }))
+                    .expect("invalid block");
+
                 schema_fields.push(quote! {
                     fields.insert(#field_name.to_string(), #crate_name::registry::MetaField {
                         name: #field_name.to_string(),
@@ -240,7 +247,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
 
                 create_stream.push(quote! {
                     if ctx.name.node == #field_name {
-                        use #crate_name::futures::stream::{StreamExt, TryStreamExt};
+                        use #crate_name::futures::{StreamExt, TryStreamExt};
 
                         #(#get_params)*
                         #guard
@@ -338,8 +345,6 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
             where
                 Self: Send + Sync + 'static + Sized,
             {
-                use #crate_name::futures::StreamExt;
-
                 #(#create_stream)*
                 Err(#crate_name::QueryError::FieldNotFound {
                     field_name: ctx.name.to_string(),

@@ -1,5 +1,5 @@
 use crate::args;
-use crate::utils::{check_reserved_name, get_crate_name, get_rustdoc};
+use crate::utils::{feature_block, get_crate_name, get_rustdoc};
 use inflector::Inflector;
 use proc_macro::TokenStream;
 use quote::quote;
@@ -15,7 +15,6 @@ pub fn generate(object_args: &args::Object, input: &mut DeriveInput) -> Result<T
         .name
         .clone()
         .unwrap_or_else(|| ident.to_string());
-    check_reserved_name(&gql_typename, object_args.internal)?;
 
     let desc = object_args
         .desc
@@ -99,23 +98,36 @@ pub fn generate(object_args: &args::Object, input: &mut DeriveInput) -> Result<T
                     .post_guard
                     .map(|guard| quote! { #guard.check(ctx, &res).await.map_err(|err| err.into_error_with_path(ctx.position(), ctx.path_node.as_ref().unwrap().to_json()))?; });
 
-                if field.is_ref {
-                    getters.push(quote! {
-                        #[inline]
-                        #[allow(missing_docs)]
-                        #vis async fn #ident(&self, ctx: &#crate_name::Context<'_>) -> #crate_name::FieldResult<&#ty> {
-                            Ok(&self.#ident)
-                        }
-                    });
+                let features = &field.features;
+                getters.push(if field.is_ref {
+                    let block = feature_block(
+                        &crate_name,
+                        &features,
+                        &field_name,
+                        quote! { Ok(&self.#ident) },
+                    );
+                    quote! {
+                         #[inline]
+                         #[allow(missing_docs)]
+                         #vis async fn #ident(&self, ctx: &#crate_name::Context<'_>) -> #crate_name::FieldResult<&#ty> {
+                             #block
+                         }
+                    }
                 } else {
-                    getters.push(quote! {
+                    let block = feature_block(
+                        &crate_name,
+                        &features,
+                        &field_name,
+                        quote! { Ok(self.#ident.clone()) },
+                    );
+                    quote! {
                         #[inline]
                         #[allow(missing_docs)]
                         #vis async fn #ident(&self, ctx: &#crate_name::Context<'_>) -> #crate_name::FieldResult<#ty> {
-                            Ok(self.#ident.clone())
+                            #block
                         }
-                    });
-                }
+                    }
+                });
 
                 resolvers.push(quote! {
                     if ctx.name.node == #field_name {
