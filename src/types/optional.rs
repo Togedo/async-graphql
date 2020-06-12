@@ -4,6 +4,7 @@ use crate::{
 };
 use async_graphql_parser::query::Field;
 use std::borrow::Cow;
+use std::ops::Deref;
 
 impl<T: Type> Type for Option<T> {
     fn type_name() -> Cow<'static, str> {
@@ -33,6 +34,19 @@ impl<T: InputValueType> InputValueType for Option<T> {
             Some(value) => value.to_value(),
             None => Value::Null,
         }
+    }
+}
+
+impl<T: InputValueType> InputValueType for Box<T> {
+    fn parse(value: Option<Value>) -> InputValueResult<Self> {
+        match value.unwrap_or_default() {
+            Value::Null => Ok(Box::new(T::parse(None)?)),
+            value => Ok(Box::new(T::parse(Some(value))?)),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        self.deref().to_value()
     }
 }
 

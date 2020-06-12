@@ -97,7 +97,7 @@
 #![allow(clippy::needless_lifetimes)]
 #![allow(clippy::trivially_copy_pass_by_ref)]
 #![recursion_limit = "256"]
-#![forbid(unsafe_code)]
+// #![forbid(unsafe_code)]
 
 #[macro_use]
 extern crate thiserror;

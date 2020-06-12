@@ -33,7 +33,7 @@ pub trait Type {
 }
 
 /// Represents a GraphQL input value
-pub trait InputValueType: Type + Sized {
+pub trait InputValueType: Type + Sized + Send + Sync {
     /// Parse from `Value`，None represent undefined.
     fn parse(value: Option<Value>) -> InputValueResult<Self>;
 
