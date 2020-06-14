@@ -170,8 +170,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 // internal types
 #[doc(hidden)]
 pub use context::ContextSelectionSet;
+
 #[doc(hidden)]
 pub mod registry;
+
 #[doc(hidden)]
 pub use base::{BoxFieldFuture, InputObjectType, InputValueType, ObjectType, OutputValueType};
 #[doc(hidden)]
@@ -335,6 +337,50 @@ pub use async_graphql_derive::Object;
 /// }
 /// ```
 pub use async_graphql_derive::SimpleObject;
+
+/// Derive a GraphQL enum
+///
+/// # Examples
+///
+/// ```rust
+/// use async_graphql::*;
+///
+/// #[derive(GQLEnum, Eq, PartialEq, Copy, Clone)]
+/// #[graphql(name = "Enum1")]
+/// enum MyEnum {
+///     One,
+///     Two,
+/// }
+/// ```
+pub use async_graphql_derive::GQLEnum;
+
+/// Derive a GraphQL input object
+///
+/// # Examples
+///
+/// ```rust
+/// use async_graphql::*;
+/// #[derive(GQLInputObject)]
+/// #[graphql(name = "MyInput1")]
+/// struct MyInput {
+///     value: i32,
+/// }
+/// ```
+pub use async_graphql_derive::GQLInputObject;
+
+/// Derive a GraphQL simple object
+///
+/// # Examples
+///
+/// ```rust
+/// use async_graphql::*;
+/// #[derive(GQLSimpleObject)]
+/// #[graphql(name = "MyObj1")]
+/// struct MyObj {
+///     value: i32,
+/// }
+/// ```
+pub use async_graphql_derive::GQLSimpleObject;
 
 /// Define a GraphQL enum
 ///
@@ -569,6 +615,9 @@ pub use async_graphql_derive::InputObject;
 /// ```
 pub use async_graphql_derive::Interface;
 
+/// Derive a GraphQL interface
+pub use async_graphql_derive::GQLInterface;
+
 /// Define a GraphQL union
 ///
 ///
@@ -634,6 +683,9 @@ pub use async_graphql_derive::Interface;
 /// }
 /// ```
 pub use async_graphql_derive::Union;
+
+/// Derive a GraphQL union
+pub use async_graphql_derive::GQLUnion;
 
 /// Define a GraphQL subscription
 ///
