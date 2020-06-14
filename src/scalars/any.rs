@@ -31,12 +31,61 @@ impl Any {
     }
 }
 
+impl Default for Any {
+    fn default() -> Any {
+        Any(Value::Null)
+    }
+}
+
 impl<T> From<T> for Any
 where
     T: Into<Value>,
 {
     fn from(value: T) -> Any {
         Any(value.into())
+    }
+}
+
+impl serde::Serialize for Any {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        serde_json::to_string(
+            &serde_json::Value::from(self.0.clone())
+        ).unwrap().serialize(serializer)
+    }
+}
+
+use serde::de::{self, Visitor};
+
+struct AnyVisitor;
+
+impl<'de> Visitor<'de> for AnyVisitor {
+    type Value = Any;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a stringified JSON value")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(Any::default())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Any {
+    fn deserialize<D>(deserializer: D) -> Result<Any, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        serde::Deserialize::deserialize(deserializer)
+            .map(|s: String| Any::from(
+                serde_json::from_str::<serde_json::Value>(&s).unwrap()
+            )
+        )
     }
 }
 

@@ -1,11 +1,20 @@
+extern crate serde;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Formatter;
 use std::fs::File;
+use serde::{Serialize, Deserialize, ser::SerializeSeq};
 
+fn defaultFile() -> File {
+    unsafe { std::mem::zeroed() }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct UploadValue {
     pub filename: String,
     pub content_type: Option<String>,
+    #[serde(default = "defaultFile", skip)]
     pub content: File,
 }
 
@@ -26,7 +35,7 @@ impl Clone for UploadValue {
 }
 
 /// Represents a GraphQL value
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(missing_docs)]
 pub enum Value {
     Null,
