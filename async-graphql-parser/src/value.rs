@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Formatter;
 use std::fs::File;
-use serde::{Serialize, Deserialize, ser::SerializeSeq};
+use serde::{Serialize, Deserialize};
 
-fn defaultFile() -> File {
+fn default_file() -> File {
     unsafe { std::mem::zeroed() }
 }
 
@@ -14,7 +14,7 @@ fn defaultFile() -> File {
 pub struct UploadValue {
     pub filename: String,
     pub content_type: Option<String>,
-    #[serde(default = "defaultFile", skip)]
+    #[serde(default = "default_file", skip)]
     pub content: File,
 }
 

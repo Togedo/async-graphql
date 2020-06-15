@@ -57,25 +57,6 @@ impl serde::Serialize for Any {
     }
 }
 
-use serde::de::{self, Visitor};
-
-struct AnyVisitor;
-
-impl<'de> Visitor<'de> for AnyVisitor {
-    type Value = Any;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("a stringified JSON value")
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(Any::default())
-    }
-}
-
 impl<'de> serde::Deserialize<'de> for Any {
     fn deserialize<D>(deserializer: D) -> Result<Any, D::Error>
     where

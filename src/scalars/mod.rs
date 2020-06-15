@@ -18,6 +18,7 @@ mod chrono_tz;
 mod url;
 
 pub use any::Any;
+pub use datetime::DateTimeUtc;
 pub use id::ID;
 pub use json::Json;
 
