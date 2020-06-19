@@ -1,6 +1,6 @@
 use crate::{InputValueError, InputValueResult, ScalarType, Value};
 use async_graphql_derive::Scalar;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use chrono_english::{parse_date_string,Dialect};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
