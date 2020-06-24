@@ -14,10 +14,13 @@ pub struct DateTimeUtc(pub DateTime<Utc>);
 impl ScalarType for DateTimeUtc {
     fn parse(value: Value) -> InputValueResult<Self> {
         match value {
-            Value::String(s) => Ok(DateTimeUtc(if s == "NOW" {
+            Value::String(s) => Ok(DateTimeUtc(if s.to_uppercase() == "NOW" {
                 Utc::now()
             } else {
-                parse_date_string(&s, Utc::now(), Dialect::Us)?
+                chrono::DateTime::parse_from_rfc3339(&s).map_or_else(
+                    |_| parse_date_string(&s, Utc::now(), Dialect::Us),
+                    |v| Ok(DateTime::<Utc>::from(v))
+                )?
             })),
             _ => Err(InputValueError::ExpectedType(value)),
         }
