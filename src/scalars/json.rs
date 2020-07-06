@@ -42,6 +42,18 @@ impl From<serde_json::Value> for Json<serde_json::Value> {
     }
 }
 
+impl From<&Json<serde_json::Value>> for serde_json::Value {
+    fn from(value: &Json<serde_json::Value>) -> serde_json::Value {
+        value.into()
+    }
+}
+
+impl From<Json<serde_json::Value>> for serde_json::Value {
+    fn from(value: Json<serde_json::Value>) -> serde_json::Value {
+        value.into()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::*;
