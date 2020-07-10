@@ -1,7 +1,7 @@
 use crate::{InputValueError, InputValueResult, ScalarType, Value};
 use async_graphql_derive::Scalar;
 use chrono::{DateTime, Utc};
-use chrono_english::{parse_date_string,Dialect};
+use chrono_english::{parse_date_string, Dialect};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 /// DateTime<Utc> wrapper struct
@@ -13,14 +13,10 @@ pub struct DateTimeUtc(pub DateTime<Utc>);
 #[Scalar(internal, name = "DateTimeUtc")]
 impl ScalarType for DateTimeUtc {
     fn parse(value: Value) -> InputValueResult<Self> {
-        match value {
-            Value::String(s) => Ok(DateTimeUtc(if s.to_uppercase() == "NOW" {
-                Utc::now()
-            } else {
-                chrono::DateTime::parse_from_rfc3339(&s).map_or_else(
-                    |_| parse_date_string(&s, Utc::now(), Dialect::Us),
-                    |v| Ok(DateTime::<Utc>::from(v))
-                )?
+        match &value {
+            Value::String(s) => Ok(DateTimeUtc(match s.parse::<DateTime<Utc>>() {
+                Ok(d) => d,
+                Err(_) => parse_date_string(s, Utc::now(), Dialect::Us)?,
             })),
             _ => Err(InputValueError::ExpectedType(value)),
         }

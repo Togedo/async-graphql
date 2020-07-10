@@ -3,6 +3,7 @@ use crate::utils::{feature_block, get_crate_name, get_rustdoc};
 use inflector::Inflector;
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::{Data, DeriveInput, Error, Fields, Result};
 
 pub fn generate(object_args: &args::Object, input: &DeriveInput) -> Result<TokenStream> {
@@ -39,10 +40,14 @@ pub fn generate(object_args: &args::Object, input: &DeriveInput) -> Result<Token
     if let Some(fields) = fields {
         for item in &fields.named {
             if let Some(field) = args::Field::parse(&crate_name, &item.attrs)? {
-                let field_name = field
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| item.ident.as_ref().unwrap().to_string().to_camel_case());
+                let field_name = field.name.clone().unwrap_or_else(|| {
+                    item.ident
+                        .as_ref()
+                        .unwrap()
+                        .unraw()
+                        .to_string()
+                        .to_camel_case()
+                });
                 let field_desc = field
                     .desc
                     .as_ref()
@@ -99,7 +104,7 @@ pub fn generate(object_args: &args::Object, input: &DeriveInput) -> Result<Token
                     .map(|guard| quote! { #guard.check(ctx, &res).await.map_err(|err| err.into_error_with_path(ctx.position(), ctx.path_node.as_ref().unwrap().to_json()))?; });
 
                 let features = &field.features;
-                getters.push(if field.is_ref {
+                getters.push(if !field.owned {
                     let block = feature_block(
                         &crate_name,
                         &features,
@@ -154,13 +159,15 @@ pub fn generate(object_args: &args::Object, input: &DeriveInput) -> Result<Token
     };
 
     let expanded = quote! {
+        #[allow(clippy::all, clippy::pedantic)]
         impl #generics #ident #where_clause {
             #(#getters)*
         }
 
+        #[allow(clippy::all, clippy::pedantic)]
         impl #generics #crate_name::Type for #ident #generics #where_clause {
-            fn type_name() -> std::borrow::Cow<'static, str> {
-                std::borrow::Cow::Borrowed(#gql_typename)
+            fn type_name() -> ::std::borrow::Cow<'static, str> {
+                ::std::borrow::Cow::Borrowed(#gql_typename)
             }
 
             fn create_type_info(registry: &mut #crate_name::registry::Registry) -> String {
@@ -179,6 +186,7 @@ pub fn generate(object_args: &args::Object, input: &DeriveInput) -> Result<Token
             }
         }
 
+        #[allow(clippy::all, clippy::pedantic)]
         #[#crate_name::async_trait::async_trait]
         impl #generics #crate_name::ObjectType for #ident #generics #where_clause {
             async fn resolve_field(&self, ctx: &#crate_name::Context<'_>) -> #crate_name::Result<#crate_name::serde_json::Value> {
@@ -190,6 +198,7 @@ pub fn generate(object_args: &args::Object, input: &DeriveInput) -> Result<Token
             }
         }
 
+        #[allow(clippy::all, clippy::pedantic)]
         #[#crate_name::async_trait::async_trait]
         impl #generics #crate_name::OutputValueType for #ident #generics #where_clause {
             async fn resolve(&self, ctx: &#crate_name::ContextSelectionSet<'_>, _field: &#crate_name::Positioned<#crate_name::parser::query::Field>) -> #crate_name::Result<#crate_name::serde_json::Value> {
