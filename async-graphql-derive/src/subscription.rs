@@ -4,6 +4,7 @@ use crate::utils::{feature_block, get_crate_name, get_param_getter_ident, get_ru
 use inflector::Inflector;
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::{
     Block, Error, FnArg, ImplItem, ItemImpl, Pat, Result, ReturnType, Type, TypeImplTrait,
     TypeReference,
@@ -47,7 +48,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                 let field_name = field
                     .name
                     .clone()
-                    .unwrap_or_else(|| method.sig.ident.to_string().to_camel_case());
+                    .unwrap_or_else(|| method.sig.ident.unraw().to_string().to_camel_case());
                 let field_desc = field
                     .desc
                     .as_ref()
@@ -143,12 +144,13 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         desc,
                         default,
                         validator,
+                        ..
                     },
                 ) in args
                 {
                     let name = name
                         .clone()
-                        .unwrap_or_else(|| ident.ident.to_string().to_camel_case());
+                        .unwrap_or_else(|| ident.ident.unraw().to_string().to_camel_case());
                     let desc = desc
                         .as_ref()
                         .map(|s| quote! {Some(#s)})
@@ -247,17 +249,15 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
 
                 create_stream.push(quote! {
                     if ctx.name.node == #field_name {
-                        use #crate_name::futures::{StreamExt, TryStreamExt};
-
                         #(#get_params)*
                         #guard
-                        let field_name = std::sync::Arc::new(ctx.result_name().to_string());
-                        let field = std::sync::Arc::new(ctx.item.clone());
+                        let field_name = ::std::sync::Arc::new(ctx.result_name().to_string());
+                        let field = ::std::sync::Arc::new(ctx.item.clone());
 
                         let pos = ctx.position();
                         let schema_env = schema_env.clone();
                         let query_env = query_env.clone();
-                        let stream = #create_field_stream.then({
+                        let stream = #crate_name::futures::StreamExt::then(#create_field_stream, {
                             let field_name = field_name.clone();
                             move |msg| {
                                 let schema_env = schema_env.clone();
@@ -265,7 +265,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                                 let field = field.clone();
                                 let field_name = field_name.clone();
                                 async move {
-                                    let resolve_id = std::sync::atomic::AtomicUsize::default();
+                                    let resolve_id = ::std::sync::atomic::AtomicUsize::default();
                                     let ctx_selection_set = query_env.create_context(
                                         &schema_env,
                                         Some(#crate_name::QueryPathNode {
@@ -279,9 +279,9 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                                     #crate_name::OutputValueType::resolve(&msg, &ctx_selection_set, &*field).await
                                 }
                             }
-                        })
-                        .map_ok(move |value| #crate_name::serde_json::json!({ field_name.as_str(): value }))
-                        .scan(true, |state, item| {
+                        });
+                        let stream = #crate_name::futures::TryStreamExt::map_ok(stream, move |value| #crate_name::serde_json::json!({ field_name.as_str(): value }));
+                        let stream = #crate_name::futures::StreamExt::scan(stream, true, |state, item| {
                             if !*state {
                                 return #crate_name::futures::future::ready(None);
                             }
@@ -309,9 +309,10 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
     let expanded = quote! {
         #item_impl
 
+        #[allow(clippy::all, clippy::pedantic)]
         impl #generics #crate_name::Type for #self_ty #where_clause {
-            fn type_name() -> std::borrow::Cow<'static, str> {
-                std::borrow::Cow::Borrowed(#gql_typename)
+            fn type_name() -> ::std::borrow::Cow<'static, str> {
+                ::std::borrow::Cow::Borrowed(#gql_typename)
             }
 
             #[allow(bare_trait_objects)]
@@ -331,17 +332,17 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
             }
         }
 
+        #[allow(clippy::all, clippy::pedantic)]
         #[#crate_name::async_trait::async_trait]
+        #[allow(unused_braces, unused_variables)]
         impl #crate_name::SubscriptionType for #self_ty #where_clause {
-            #[allow(unused_variables)]
-            #[allow(bare_trait_objects)]
             async fn create_field_stream(
                 &self,
                 idx: usize,
                 ctx: &#crate_name::Context<'_>,
                 schema_env: #crate_name::SchemaEnv,
                 query_env: #crate_name::QueryEnv,
-            ) -> #crate_name::Result<std::pin::Pin<Box<dyn #crate_name::futures::Stream<Item = #crate_name::Result<#crate_name::serde_json::Value>> + Send>>>
+            ) -> #crate_name::Result<::std::pin::Pin<Box<dyn #crate_name::futures::Stream<Item = #crate_name::Result<#crate_name::serde_json::Value>> + Send>>>
             where
                 Self: Send + Sync + 'static + Sized,
             {

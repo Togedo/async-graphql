@@ -4,6 +4,7 @@ use crate::utils::{feature_block, get_crate_name, get_param_getter_ident, get_ru
 use inflector::Inflector;
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::{Block, Error, FnArg, ImplItem, ItemImpl, Pat, Result, ReturnType, Type, TypeReference};
 
 pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<TokenStream> {
@@ -113,29 +114,49 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                 let mut use_keys = Vec::new();
                 let mut keys = Vec::new();
                 let mut keys_str = String::new();
+                let mut requires_getter = Vec::new();
+                let all_key = args.iter().all(|(_, _, arg)| !arg.key);
 
-                for (ident, ty, args::Argument { name, .. }) in &args {
+                if args.is_empty() {
+                    return Err(Error::new_spanned(
+                        method,
+                        "Entity need to have at least one key.",
+                    ));
+                }
+
+                for (ident, ty, args::Argument { name, key, .. }) in &args {
+                    let is_key = all_key || *key;
                     let name = name
                         .clone()
-                        .unwrap_or_else(|| ident.ident.to_string().to_camel_case());
+                        .unwrap_or_else(|| ident.ident.unraw().to_string().to_camel_case());
 
-                    if !keys_str.is_empty() {
-                        keys_str.push(' ');
+                    if is_key {
+                        if !keys_str.is_empty() {
+                            keys_str.push(' ');
+                        }
+                        keys_str.push_str(&name);
+
+                        key_pat.push(quote! {
+                            Some(#ident)
+                        });
+                        key_getter.push(quote! {
+                            params.get(#name).and_then(|value| {
+                                let value: Option<#ty> = #crate_name::InputValueType::parse(Some(value.clone())).ok();
+                                value
+                            })
+                        });
+                        keys.push(name);
+                        use_keys.push(ident);
+                    } else {
+                        // requires
+                        requires_getter.push(quote! {
+                            let #ident: #ty = #crate_name::InputValueType::parse(params.get(#name).cloned()).
+                                map_err(|err| err.into_error(ctx.position(), <#ty as #crate_name::Type>::qualified_type_name()))?;
+                        });
+                        use_keys.push(ident);
                     }
-                    keys_str.push_str(&name);
-
-                    key_pat.push(quote! {
-                        Some(#ident)
-                    });
-                    key_getter.push(quote! {
-                        params.get(#name).and_then(|value| {
-                            let value: Option<#ty> = #crate_name::InputValueType::parse(Some(value.clone())).ok();
-                            value
-                        })
-                    });
-                    keys.push(name);
-                    use_keys.push(ident);
                 }
+
                 add_keys.push(quote! { registry.add_keys(&<#entity_type as #crate_name::Type>::type_name(), #keys_str); });
                 create_entity_types.push(
                     quote! { <#entity_type as #crate_name::Type>::create_type_info(registry); },
@@ -163,6 +184,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                     quote! {
                         if typename == &<#entity_type as #crate_name::Type>::type_name() {
                             if let (#(#key_pat),*) = (#(#key_getter),*) {
+                                #(#requires_getter)*
                                 let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
                                 return #crate_name::OutputValueType::resolve(&#do_find, &ctx_obj, ctx.item).await;
                             }
@@ -187,7 +209,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                 let field_name = field
                     .name
                     .clone()
-                    .unwrap_or_else(|| method.sig.ident.to_string().to_camel_case());
+                    .unwrap_or_else(|| method.sig.ident.unraw().to_string().to_camel_case());
                 let field_desc = field
                     .desc
                     .as_ref()
@@ -290,12 +312,13 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                         desc,
                         default,
                         validator,
+                        ..
                     },
                 ) in args
                 {
                     let name = name
                         .clone()
-                        .unwrap_or_else(|| ident.ident.to_string().to_camel_case());
+                        .unwrap_or_else(|| ident.ident.unraw().to_string().to_camel_case());
                     let desc = desc
                         .as_ref()
                         .map(|s| quote! {Some(#s)})
@@ -395,13 +418,12 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
 
                 resolvers.push(quote! {
                     if ctx.name.node == #field_name {
-                        use #crate_name::OutputValueType;
                         #(#get_params)*
                         #guard
                         let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
                         let res = #resolve_obj;
                         #post_guard
-                        return OutputValueType::resolve(&res, &ctx_obj, ctx.item).await;
+                        return #crate_name::OutputValueType::resolve(&res, &ctx_obj, ctx.item).await;
                     }
                 });
 
@@ -441,9 +463,10 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
     let expanded = quote! {
         #item_impl
 
+        #[allow(clippy::all, clippy::pedantic)]
         impl #generics #crate_name::Type for #self_ty #where_clause {
-            fn type_name() -> std::borrow::Cow<'static, str> {
-                std::borrow::Cow::Borrowed(#gql_typename)
+            fn type_name() -> ::std::borrow::Cow<'static, str> {
+                ::std::borrow::Cow::Borrowed(#gql_typename)
             }
 
             fn create_type_info(registry: &mut #crate_name::registry::Registry) -> String {
@@ -465,7 +488,8 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
             }
         }
 
-        #[allow(unused_braces, unused_parens)]
+        #[allow(clippy::all, clippy::pedantic, clippy::suspicious_else_formatting)]
+        #[allow(unused_braces, unused_variables)]
         #[#crate_name::async_trait::async_trait]
         impl#generics #crate_name::ObjectType for #self_ty #where_clause {
             async fn resolve_field(&self, ctx: &#crate_name::Context<'_>) -> #crate_name::Result<#crate_name::serde_json::Value> {
@@ -476,7 +500,6 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
                 }.into_error(ctx.position()))
             }
 
-            #[allow(unused_variables)]
             async fn find_entity(&self, ctx: &#crate_name::Context<'_>, params: &#crate_name::Value) -> #crate_name::Result<#crate_name::serde_json::Value> {
                 let params = match params {
                     #crate_name::Value::Object(params) => params,
@@ -492,6 +515,7 @@ pub fn generate(object_args: &args::Object, item_impl: &mut ItemImpl) -> Result<
             }
         }
 
+        #[allow(clippy::all, clippy::pedantic)]
         #[#crate_name::async_trait::async_trait]
         impl #generics #crate_name::OutputValueType for #self_ty #where_clause {
             async fn resolve(&self, ctx: &#crate_name::ContextSelectionSet<'_>, _field: &#crate_name::Positioned<#crate_name::parser::query::Field>) -> #crate_name::Result<#crate_name::serde_json::Value> {

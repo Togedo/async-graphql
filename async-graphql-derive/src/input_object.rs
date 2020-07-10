@@ -3,6 +3,7 @@ use crate::utils::{get_crate_name, get_rustdoc};
 use inflector::Inflector;
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::{Data, DeriveInput, Error, Result};
 
 pub fn generate(object_args: &args::InputObject, input: &DeriveInput) -> Result<TokenStream> {
@@ -53,7 +54,7 @@ pub fn generate(object_args: &args::InputObject, input: &DeriveInput) -> Result<
         let validator = &field_args.validator;
         let name = field_args
             .name
-            .unwrap_or_else(|| ident.to_string().to_camel_case());
+            .unwrap_or_else(|| ident.unraw().to_string().to_camel_case());
         let desc = field_args
             .desc
             .as_ref()
@@ -99,9 +100,10 @@ pub fn generate(object_args: &args::InputObject, input: &DeriveInput) -> Result<
     }
 
     let expanded = quote! {
+        #[allow(clippy::all, clippy::pedantic)]
         impl #crate_name::Type for #ident {
-            fn type_name() -> std::borrow::Cow<'static, str> {
-                std::borrow::Cow::Borrowed(#gql_typename)
+            fn type_name() -> ::std::borrow::Cow<'static, str> {
+                ::std::borrow::Cow::Borrowed(#gql_typename)
             }
 
             fn create_type_info(registry: &mut #crate_name::registry::Registry) -> String {
@@ -117,10 +119,9 @@ pub fn generate(object_args: &args::InputObject, input: &DeriveInput) -> Result<
             }
         }
 
+        #[allow(clippy::all, clippy::pedantic)]
         impl #crate_name::InputValueType for #ident {
             fn parse(value: Option<#crate_name::Value>) -> #crate_name::InputValueResult<Self> {
-                use #crate_name::Type;
-
                 if let Some(#crate_name::Value::Object(obj)) = value {
                     #(#get_fields)*
                     Ok(Self { #(#fields),* })
@@ -130,7 +131,7 @@ pub fn generate(object_args: &args::InputObject, input: &DeriveInput) -> Result<
             }
 
             fn to_value(&self) -> #crate_name::Value {
-                let mut map = std::collections::BTreeMap::new();
+                let mut map = ::std::collections::BTreeMap::new();
                 #(#put_fields)*
                 #crate_name::Value::Object(map)
             }

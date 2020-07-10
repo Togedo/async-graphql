@@ -130,6 +130,7 @@ pub struct Argument {
     pub desc: Option<String>,
     pub default: Option<TokenStream>,
     pub validator: TokenStream,
+    pub key: bool, // for entity
 }
 
 impl Argument {
@@ -138,6 +139,7 @@ impl Argument {
         let mut desc = None;
         let mut default = None;
         let mut validator = quote! { None };
+        let mut key = false;
 
         for attr in attrs {
             match attr.parse_meta()? {
@@ -146,6 +148,8 @@ impl Argument {
                         if let NestedMeta::Meta(Meta::Path(p)) = meta {
                             if p.is_ident("default") {
                                 default = Some(quote! { Default::default() });
+                            } else if p.is_ident("key") {
+                                key = true;
                             }
                         } else if let NestedMeta::Meta(Meta::NameValue(nv)) = meta {
                             if nv.path.is_ident("name") {
@@ -185,6 +189,7 @@ impl Argument {
             desc,
             default,
             validator,
+            key,
         })
     }
 }
@@ -197,7 +202,7 @@ pub struct Field {
     pub external: bool,
     pub provides: Option<String>,
     pub requires: Option<String>,
-    pub is_ref: bool,
+    pub owned: bool,
     pub guard: Option<TokenStream>,
     pub post_guard: Option<TokenStream>,
     pub features: Vec<String>,
@@ -213,7 +218,7 @@ impl Field {
         let mut provides = None;
         let mut requires = None;
         let mut features = Vec::new();
-        let mut is_ref = false;
+        let mut owned = false;
         let mut guard = None;
         let mut post_guard = None;
 
@@ -230,8 +235,14 @@ impl Field {
                             NestedMeta::Meta(Meta::Path(p)) if p.is_ident("external") => {
                                 external = true;
                             }
+                            NestedMeta::Meta(Meta::Path(p)) if p.is_ident("owned") => {
+                                owned = true;
+                            }
                             NestedMeta::Meta(Meta::Path(p)) if p.is_ident("ref") => {
-                                is_ref = true;
+                                return Err(Error::new_spanned(
+                                    &p,
+                                    "Attribute `ref` is no longer supported. By default, all fields resolver return borrowed value. If you want to return ownership value, use `owned` attribute.",
+                                ));
                             }
                             NestedMeta::Meta(Meta::NameValue(nv)) => {
                                 if nv.path.is_ident("name") {
@@ -320,7 +331,7 @@ impl Field {
             external,
             provides,
             requires,
-            is_ref,
+            owned,
             guard,
             post_guard,
             features,
@@ -829,27 +840,6 @@ impl Interface {
             fields,
             extends,
         })
-    }
-}
-
-pub struct DataSource {
-    pub internal: bool,
-}
-
-impl DataSource {
-    pub fn parse(args: AttributeArgs) -> Result<Self> {
-        let mut internal = false;
-
-        for arg in args {
-            match arg {
-                NestedMeta::Meta(Meta::Path(p)) if p.is_ident("internal") => {
-                    internal = true;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(Self { internal })
     }
 }
 

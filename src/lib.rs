@@ -34,15 +34,15 @@
 //!
 //! ## Features
 //!
-//! * Fully support async/await
+//! * Fully supports async/await
 //! * Type safety
 //! * Rustfmt friendly (Procedural Macro)
-//! * Custom scalar
+//! * Custom scalars
 //! * Minimal overhead
 //! * Easy integration (hyper, actix_web, tide ...)
 //! * Upload files (Multipart request)
-//! * Subscription (WebSocket transport)
-//! * Custom extension
+//! * Subscriptions (WebSocket transport)
+//! * Custom extensions
 //! * Apollo Tracing extension
 //! * Limit query complexity/depth
 //! * Error Extensions
@@ -154,7 +154,7 @@ pub use query::{
     IntoQueryBuilder, IntoQueryBuilderOpts, QueryBuilder, QueryResponse, StreamResponse,
 };
 pub use registry::CacheControl;
-pub use scalars::{Any, DateTimeUtc, Json, ID};
+pub use scalars::{Any, DateTimeUtc, Json, OutputJson, ID};
 pub use schema::{Schema, SchemaBuilder, SchemaEnv};
 pub use subscription::{
     SimpleBroker, SubscriptionStreams, SubscriptionTransport, WebSocketTransport,
@@ -210,12 +210,14 @@ pub use types::{EnumItem, EnumType};
 ///
 /// # Field argument parameters
 ///
-/// | Attribute   | description               | Type     | Optional |
-/// |-------------|---------------------------|----------|----------|
-/// | name        | Argument name             | string   | Y        |
-/// | desc        | Argument description      | string   | Y        |
-/// | default     | Argument default value    | string   | Y        |
-/// | validator   | Input value validator     | [`InputValueValidator`](validators/trait.InputValueValidator.html) | Y        |
+/// | Attribute    | description                              | Type        | Optional |
+/// |--------------|------------------------------------------|------------ |----------|
+/// | name         | Argument name                            | string      | Y        |
+/// | desc         | Argument description                     | string      | Y        |
+/// | default      | Use `Default::default` for default value | none        | Y        |
+/// | default      | Argument default value                   | literal     | Y        |
+/// | default_with | Expression to generate default value     | code string | Y        |
+/// | validator    | Input value validator                    | [`InputValueValidator`](validators/trait.InputValueValidator.html) | Y        |
 ///
 /// # The field returns the value type
 ///
@@ -310,6 +312,7 @@ pub use async_graphql_derive::Object;
 /// | name          | Field name                | string   | Y        |
 /// | desc          | Field description         | string   | Y        |
 /// | deprecation   | Field deprecation reason  | string   | Y        |
+/// | owned         | Field resolver return a ownedship value  | bool   | Y        |
 /// | cache_control | Field cache control       | [`CacheControl`](struct.CacheControl.html) | Y        |
 /// | external      | Mark a field as owned by another service. This allows service A to use fields from service B while also knowing at runtime the types of that field. | bool | Y |
 /// | provides      | Annotate the expected returned fieldset from a field on a base type that is guaranteed to be selectable by the gateway. | string | Y |
@@ -398,7 +401,6 @@ pub use async_graphql_derive::GQLSimpleObject;
 /// | name        | Item name                 | string   | Y        |
 /// | desc        | Item description          | string   | Y        |
 /// | deprecation | Item deprecation reason   | string   | Y        |
-/// | ref         | The resolver function returns a borrowing value  | bool   | Y        |
 ///
 /// # Examples
 ///
@@ -449,12 +451,14 @@ pub use async_graphql_derive::Enum;
 ///
 /// # Field parameters
 ///
-/// | Attribute   | description               | Type     | Optional |
-/// |-------------|---------------------------|----------|----------|
-/// | name        | Field name                | string   | Y        |
-/// | desc        | Field description         | string   | Y        |
-/// | default     | Field default value       | string   | Y        |
-/// | validator   | Input value validator     | [`InputValueValidator`](validators/trait.InputValueValidator.html) | Y        |
+/// | Attribute    | description                              | Type     | Optional |
+/// |--------------|------------------------------------------|----------|----------|
+/// | name         | Field name                               | string   | Y        |
+/// | desc         | Field description                        | string   | Y        |
+/// | default      | Use `Default::default` for default value | none        | Y        |
+/// | default      | Argument default value                   | literal     | Y        |
+/// | default_with | Expression to generate default value     | code string | Y        |
+/// | validator    | Input value validator                    | [`InputValueValidator`](validators/trait.InputValueValidator.html) | Y        |
 ///
 /// # Examples
 ///
@@ -513,12 +517,14 @@ pub use async_graphql_derive::InputObject;
 ///
 /// # Field argument parameters
 ///
-/// | Attribute   | description               | Type     | Optional |
-/// |-------------|---------------------------|----------|----------|
-/// | name        | Argument name             | string   | N        |
-/// | type        | Argument type             | string   | N        |
-/// | desc        | Argument description      | string   | Y        |
-/// | default     | Argument default value    | string   | Y        |
+/// | Attribute    | description                              | Type        | Optional |
+/// |--------------|------------------------------------------|-------------|----------|
+/// | name         | Argument name                            | string      | N        |
+/// | type         | Argument type                            | string      | N        |
+/// | desc         | Argument description                     | string      | Y        |
+/// | default      | Use `Default::default` for default value | none        | Y        |
+/// | default      | Argument default value                   | literal     | Y        |
+/// | default_with | Expression to generate default value     | code string | Y        |
 ///
 /// # Define an interface
 ///
@@ -549,8 +555,8 @@ pub use async_graphql_derive::InputObject;
 /// #[Object]
 /// impl TypeA {
 ///     /// Returns data borrowed from the context
-///     async fn value_a<'a>(&self, ctx: &'a Context<'_>) -> &'a str {
-///         ctx.data::<String>().as_str()
+///     async fn value_a<'a>(&self, ctx: &'a Context<'_>) -> FieldResult<&'a str> {
+///         Ok(ctx.data::<String>()?.as_str())
 ///     }
 ///
 ///     /// Returns data borrowed self
@@ -713,12 +719,14 @@ pub use async_graphql_derive::GQLUnion;
 ///
 /// # Field argument parameters
 ///
-/// | Attribute   | description               | Type     | Optional |
-/// |-------------|---------------------------|----------|----------|
-/// | name        | Argument name             | string   | Y        |
-/// | desc        | Argument description      | string   | Y        |
-/// | default     | Argument default value    | string   | Y        |
-/// | validator   | Input value validator     | [`InputValueValidator`](validators/trait.InputValueValidator.html) | Y        |
+/// | Attribute    | description                              | Type        | Optional |
+/// |--------------|------------------------------------------|-------------|----------|
+/// | name         | Argument name                            | string      | Y        |
+/// | desc         | Argument description                     | string      | Y        |
+/// | default      | Use `Default::default` for default value | none        | Y        |
+/// | default      | Argument default value                   | literal     | Y        |
+/// | default_with | Expression to generate default value     | code string | Y        |
+/// | validator    | Input value validator                    | [`InputValueValidator`](validators/trait.InputValueValidator.html) | Y        |
 ///
 /// # Examples
 ///
@@ -741,9 +749,6 @@ pub use async_graphql_derive::GQLUnion;
 /// }
 /// ```
 pub use async_graphql_derive::Subscription;
-
-/// Define a DataSource
-pub use async_graphql_derive::DataSource;
 
 /// Define a Scalar
 ///
