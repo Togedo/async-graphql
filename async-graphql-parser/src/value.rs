@@ -1,20 +1,17 @@
 extern crate serde;
-
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::Formatter;
 use std::fs::File;
-use serde::{Serialize, Deserialize};
 
 fn default_file() -> File {
     unsafe { std::mem::zeroed() }
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct UploadValue {
     pub filename: String,
     pub content_type: Option<String>,
-    #[serde(default = "default_file", skip)]
     pub content: File,
 }
 
