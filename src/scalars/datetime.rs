@@ -32,3 +32,9 @@ impl Default for DateTimeUtc {
         DateTimeUtc(Utc::now())
     }
 }
+
+impl Into<serde_json::Value> for DateTimeUtc {
+    fn into(self) -> serde_json::Value {
+        serde_json::Value::String(self.0.to_rfc3339())
+    }
+}
