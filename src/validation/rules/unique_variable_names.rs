@@ -1,7 +1,8 @@
-use crate::parser::query::{OperationDefinition, VariableDefinition};
-use crate::validation::visitor::{Visitor, VisitorContext};
-use crate::Positioned;
 use std::collections::HashSet;
+
+use crate::parser::types::{OperationDefinition, VariableDefinition};
+use crate::validation::visitor::{Visitor, VisitorContext};
+use crate::{Name, Positioned};
 
 #[derive(Default)]
 pub struct UniqueVariableNames<'a> {
@@ -12,6 +13,7 @@ impl<'a> Visitor<'a> for UniqueVariableNames<'a> {
     fn enter_operation_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
+        _name: Option<&'a Name>,
         _operation_definition: &'a Positioned<OperationDefinition>,
     ) {
         self.names.clear();
@@ -22,12 +24,12 @@ impl<'a> Visitor<'a> for UniqueVariableNames<'a> {
         ctx: &mut VisitorContext<'a>,
         variable_definition: &'a Positioned<VariableDefinition>,
     ) {
-        if !self.names.insert(variable_definition.name.as_str()) {
+        if !self.names.insert(&variable_definition.node.name.node) {
             ctx.report_error(
-                vec![variable_definition.position()],
+                vec![variable_definition.pos],
                 format!(
                     "There can only be one variable named \"${}\"",
-                    variable_definition.name
+                    variable_definition.node.name.node
                 ),
             );
         }
@@ -37,7 +39,6 @@ impl<'a> Visitor<'a> for UniqueVariableNames<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory<'a>() -> UniqueVariableNames<'a> {
         UniqueVariableNames::default()

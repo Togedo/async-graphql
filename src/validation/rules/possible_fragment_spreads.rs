@@ -1,7 +1,8 @@
-use crate::parser::query::{Definition, Document, FragmentSpread, InlineFragment, TypeCondition};
+use std::collections::HashMap;
+
+use crate::parser::types::{ExecutableDocument, FragmentSpread, InlineFragment, TypeCondition};
 use crate::validation::visitor::{Visitor, VisitorContext};
 use crate::Positioned;
-use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct PossibleFragmentSpreads<'a> {
@@ -9,13 +10,10 @@ pub struct PossibleFragmentSpreads<'a> {
 }
 
 impl<'a> Visitor<'a> for PossibleFragmentSpreads<'a> {
-    fn enter_document(&mut self, _ctx: &mut VisitorContext<'a>, doc: &'a Document) {
-        for d in doc.definitions() {
-            if let Definition::Fragment(fragment) = &d.node {
-                let TypeCondition::On(type_name) = &fragment.type_condition.node;
-                self.fragment_types
-                    .insert(fragment.name.as_str(), type_name);
-            }
+    fn enter_document(&mut self, _ctx: &mut VisitorContext<'a>, doc: &'a ExecutableDocument) {
+        for (name, fragment) in doc.fragments.iter() {
+            self.fragment_types
+                .insert(name.as_str(), &fragment.node.type_condition.node.on.node);
         }
     }
 
@@ -26,16 +24,16 @@ impl<'a> Visitor<'a> for PossibleFragmentSpreads<'a> {
     ) {
         if let Some(fragment_type) = self
             .fragment_types
-            .get(fragment_spread.fragment_name.as_str())
+            .get(&*fragment_spread.node.fragment_name.node)
         {
             if let Some(current_type) = ctx.current_type() {
                 if let Some(on_type) = ctx.registry.types.get(*fragment_type) {
                     if !current_type.type_overlap(on_type) {
                         ctx.report_error(
-                            vec![fragment_spread.position()],
+                            vec![fragment_spread.pos],
                             format!(
                                 "Fragment \"{}\" cannot be spread here as objects of type \"{}\" can never be of type \"{}\"",
-                                &fragment_spread.fragment_name, current_type.name(), fragment_type
+                                fragment_spread.node.fragment_name.node, current_type.name(), fragment_type
                             ),
                         );
                     }
@@ -50,13 +48,16 @@ impl<'a> Visitor<'a> for PossibleFragmentSpreads<'a> {
         inline_fragment: &'a Positioned<InlineFragment>,
     ) {
         if let Some(parent_type) = ctx.parent_type() {
-            if let Some(TypeCondition::On(fragment_type)) =
-                &inline_fragment.type_condition.as_ref().map(|c| &c.node)
+            if let Some(TypeCondition { on: fragment_type }) = &inline_fragment
+                .node
+                .type_condition
+                .as_ref()
+                .map(|c| &c.node)
             {
-                if let Some(on_type) = ctx.registry.types.get(fragment_type.as_str()) {
+                if let Some(on_type) = ctx.registry.types.get(fragment_type.node.as_str()) {
                     if !parent_type.type_overlap(&on_type) {
                         ctx.report_error(
-                            vec![inline_fragment.position()],
+                            vec![inline_fragment.pos],
                             format!(
                                 "Fragment cannot be spread here as objects of type \"{}\" \
              can never be of type \"{}\"",
@@ -74,7 +75,6 @@ impl<'a> Visitor<'a> for PossibleFragmentSpreads<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory<'a>() -> PossibleFragmentSpreads<'a> {
         PossibleFragmentSpreads::default()
@@ -87,6 +87,7 @@ mod tests {
             r#"
           fragment objectWithinObject on Dog { ...dogFragment }
           fragment dogFragment on Dog { barkVolume }
+          { __typename }
         "#,
         );
     }
@@ -97,6 +98,7 @@ mod tests {
             factory,
             r#"
           fragment objectWithinObjectAnon on Dog { ... on Dog { barkVolume } }
+          { __typename }
         "#,
         );
     }
@@ -108,6 +110,7 @@ mod tests {
             r#"
           fragment objectWithinInterface on Pet { ...dogFragment }
           fragment dogFragment on Dog { barkVolume }
+          { __typename }
         "#,
         );
     }
@@ -119,6 +122,7 @@ mod tests {
             r#"
           fragment objectWithinUnion on CatOrDog { ...dogFragment }
           fragment dogFragment on Dog { barkVolume }
+          { __typename }
         "#,
         );
     }
@@ -130,6 +134,7 @@ mod tests {
             r#"
           fragment unionWithinObject on Dog { ...catOrDogFragment }
           fragment catOrDogFragment on CatOrDog { __typename }
+          { __typename }
         "#,
         );
     }
@@ -141,6 +146,7 @@ mod tests {
             r#"
           fragment unionWithinInterface on Pet { ...catOrDogFragment }
           fragment catOrDogFragment on CatOrDog { __typename }
+          { __typename }
         "#,
         );
     }
@@ -152,6 +158,7 @@ mod tests {
             r#"
           fragment unionWithinUnion on DogOrHuman { ...catOrDogFragment }
           fragment catOrDogFragment on CatOrDog { __typename }
+          { __typename }
         "#,
         );
     }
@@ -163,6 +170,7 @@ mod tests {
             r#"
           fragment interfaceWithinObject on Dog { ...petFragment }
           fragment petFragment on Pet { name }
+          { __typename }
         "#,
         );
     }
@@ -174,6 +182,7 @@ mod tests {
             r#"
           fragment interfaceWithinInterface on Pet { ...beingFragment }
           fragment beingFragment on Being { name }
+          { __typename }
         "#,
         );
     }
@@ -184,6 +193,7 @@ mod tests {
             factory,
             r#"
           fragment interfaceWithinInterface on Pet { ... on Being { name } }
+          { __typename }
         "#,
         );
     }
@@ -195,6 +205,7 @@ mod tests {
             r#"
           fragment interfaceWithinUnion on CatOrDog { ...petFragment }
           fragment petFragment on Pet { name }
+          { __typename }
         "#,
         );
     }
@@ -206,6 +217,7 @@ mod tests {
             r#"
           fragment invalidObjectWithinObject on Cat { ...dogFragment }
           fragment dogFragment on Dog { barkVolume }
+          { __typename }
         "#,
         );
     }
@@ -218,6 +230,7 @@ mod tests {
           fragment invalidObjectWithinObjectAnon on Cat {
             ... on Dog { barkVolume }
           }
+          { __typename }
         "#,
         );
     }
@@ -229,6 +242,7 @@ mod tests {
             r#"
           fragment invalidObjectWithinInterface on Pet { ...humanFragment }
           fragment humanFragment on Human { pets { name } }
+          { __typename }
         "#,
         );
     }
@@ -240,6 +254,7 @@ mod tests {
             r#"
           fragment invalidObjectWithinUnion on CatOrDog { ...humanFragment }
           fragment humanFragment on Human { pets { name } }
+          { __typename }
         "#,
         );
     }
@@ -251,6 +266,7 @@ mod tests {
             r#"
           fragment invalidUnionWithinObject on Human { ...catOrDogFragment }
           fragment catOrDogFragment on CatOrDog { __typename }
+          { __typename }
         "#,
         );
     }
@@ -262,6 +278,7 @@ mod tests {
             r#"
           fragment invalidUnionWithinInterface on Pet { ...humanOrAlienFragment }
           fragment humanOrAlienFragment on HumanOrAlien { __typename }
+          { __typename }
         "#,
         );
     }
@@ -273,6 +290,7 @@ mod tests {
             r#"
           fragment invalidUnionWithinUnion on CatOrDog { ...humanOrAlienFragment }
           fragment humanOrAlienFragment on HumanOrAlien { __typename }
+          { __typename }
         "#,
         );
     }
@@ -284,6 +302,7 @@ mod tests {
             r#"
           fragment invalidInterfaceWithinObject on Cat { ...intelligentFragment }
           fragment intelligentFragment on Intelligent { iq }
+          { __typename }
         "#,
         );
     }
@@ -297,6 +316,7 @@ mod tests {
             ...intelligentFragment
           }
           fragment intelligentFragment on Intelligent { iq }
+          { __typename }
         "#,
         );
     }
@@ -309,6 +329,7 @@ mod tests {
           fragment invalidInterfaceWithinInterfaceAnon on Pet {
             ...on Intelligent { iq }
           }
+          { __typename }
         "#,
         );
     }
@@ -320,6 +341,7 @@ mod tests {
             r#"
           fragment invalidInterfaceWithinUnion on HumanOrAlien { ...petFragment }
           fragment petFragment on Pet { name }
+          { __typename }
         "#,
         );
     }

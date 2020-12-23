@@ -2,7 +2,7 @@ use async_graphql::*;
 
 #[async_std::test]
 pub async fn test_maybe_undefined_type() {
-    #[InputObject]
+    #[derive(InputObject)]
     struct MyInput {
         value: MaybeUndefined<i32>,
     }
@@ -37,15 +37,15 @@ pub async fn test_maybe_undefined_type() {
         {
             v1:value1(input: 99)
             v2:value1(input: null)
-            v3:value1()
+            v3:value1
             v4:value2(input: { value: 99} )
             v5:value2(input: { value: null} )
             v6:value2(input: {} )
         }
     "#;
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "v1": 99,
             "v2": 1,
             "v3": 2,

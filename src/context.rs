@@ -1,138 +1,128 @@
-use crate::extensions::Extensions;
-use crate::parser::query::{Directive, Field, SelectionSet};
-use crate::schema::SchemaEnv;
-use crate::{
-    FieldResult, InputValueType, Lookahead, Pos, Positioned, QueryError, QueryResponse, Result,
-    Type, Value,
-};
-use async_graphql_parser::query::Document;
-use async_graphql_parser::UploadValue;
-use fnv::FnvHashMap;
-use futures::Future;
-use parking_lot::Mutex;
-use serde::ser::SerializeSeq;
-use serde::Serializer;
+//! Query context.
+
 use std::any::{Any, TypeId};
-use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter};
-use std::fs::File;
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
+use std::collections::{BTreeMap, HashMap};
+use std::convert::TryFrom;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::ops::Deref;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-/// Variables of query
-#[derive(Debug, Clone, Serialize)]
-pub struct Variables(Value);
+use async_graphql_value::Value as InputValue;
+use fnv::FnvHashMap;
+use serde::de::{Deserialize, Deserializer};
+use serde::ser::{SerializeSeq, Serializer};
+use serde::Serialize;
 
-impl Default for Variables {
-    fn default() -> Self {
-        Self(Value::Object(Default::default()))
-    }
-}
+use crate::extensions::Extensions;
+use crate::parser::types::{
+    Directive, Field, FragmentDefinition, OperationDefinition, Selection, SelectionSet,
+};
+use crate::schema::SchemaEnv;
+use crate::{
+    Error, InputType, Lookahead, Name, Pos, Positioned, Result, ServerError, ServerResult,
+    UploadValue, Value,
+};
 
-impl Deref for Variables {
-    type Target = BTreeMap<String, Value>;
-
-    fn deref(&self) -> &Self::Target {
-        if let Value::Object(obj) = &self.0 {
-            obj
-        } else {
-            unreachable!()
-        }
-    }
-}
+/// Variables of a query.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(transparent)]
+pub struct Variables(pub BTreeMap<Name, Value>);
 
 impl Display for Variables {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("{")?;
+        for (i, (name, value)) in self.0.iter().enumerate() {
+            write!(f, "{}{}: {}", if i == 0 { "" } else { ", " }, name, value)?;
+        }
+        f.write_str("}")
     }
 }
 
-impl DerefMut for Variables {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        if let Value::Object(obj) = &mut self.0 {
-            obj
-        } else {
-            unreachable!()
-        }
+impl<'de> Deserialize<'de> for Variables {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(
+            <Option<BTreeMap<Name, Value>>>::deserialize(deserializer)?.unwrap_or_default(),
+        ))
     }
 }
 
 impl Variables {
-    /// Parse variables from JSON object.
-    pub fn parse_from_json(value: serde_json::Value) -> Result<Self> {
-        if let Value::Object(obj) = value.into() {
-            Ok(Variables(Value::Object(obj)))
-        } else {
-            Ok(Default::default())
+    /// Get the variables from a GraphQL value.
+    ///
+    /// If the value is not a map, then no variables will be returned.
+    #[must_use]
+    pub fn from_value(value: Value) -> Self {
+        match value {
+            Value::Object(obj) => Self(obj),
+            _ => Self::default(),
         }
     }
 
-    pub(crate) fn set_upload(
-        &mut self,
-        var_path: &str,
-        filename: String,
-        content_type: Option<String>,
-        content: File,
-    ) {
-        let mut it = var_path.split('.').peekable();
+    /// Get the values from a JSON value.
+    ///
+    /// If the value is not a map or the keys of a map are not valid GraphQL names, then no
+    /// variables will be returned.
+    #[must_use]
+    pub fn from_json(value: serde_json::Value) -> Self {
+        Value::from_json(value)
+            .map(Self::from_value)
+            .unwrap_or_default()
+    }
 
-        if let Some(first) = it.next() {
-            if first != "variables" {
-                return;
-            }
-        }
+    /// Get the variables as a GraphQL value.
+    #[must_use]
+    pub fn into_value(self) -> Value {
+        Value::Object(self.0)
+    }
 
-        let mut current = &mut self.0;
-        while let Some(s) = it.next() {
-            let has_next = it.peek().is_some();
+    pub(crate) fn variable_path(&mut self, path: &str) -> Option<&mut Value> {
+        let mut parts = path.strip_prefix("variables.")?.split('.');
 
-            if let Ok(idx) = s.parse::<i32>() {
-                if let Value::List(ls) = current {
-                    if let Some(value) = ls.get_mut(idx as usize) {
-                        if !has_next {
-                            *value = Value::Upload(UploadValue {
-                                filename,
-                                content_type,
-                                content,
-                            });
-                            return;
-                        } else {
-                            current = value;
-                        }
-                    } else {
-                        return;
-                    }
-                }
-            } else if let Value::Object(obj) = current {
-                if let Some(value) = obj.get_mut(s) {
-                    if !has_next {
-                        *value = Value::Upload(UploadValue {
-                            filename,
-                            content_type,
-                            content,
-                        });
-                        return;
-                    } else {
-                        current = value;
-                    }
-                } else {
-                    return;
-                }
-            }
-        }
+        let initial = self.0.get_mut(parts.next().unwrap())?;
+
+        parts.try_fold(initial, |current, part| match current {
+            Value::List(list) => part
+                .parse::<u32>()
+                .ok()
+                .and_then(|idx| usize::try_from(idx).ok())
+                .and_then(move |idx| list.get_mut(idx)),
+            Value::Object(obj) => obj.get_mut(part),
+            _ => None,
+        })
     }
 }
 
+impl From<Variables> for Value {
+    fn from(variables: Variables) -> Self {
+        variables.into_value()
+    }
+}
+
+/// Schema/Context data.
+///
+/// This is a type map, allowing you to store anything inside it.
 #[derive(Default)]
-/// Schema/Context data
 pub struct Data(FnvHashMap<TypeId, Box<dyn Any + Sync + Send>>);
 
+impl Deref for Data {
+    type Target = FnvHashMap<TypeId, Box<dyn Any + Sync + Send>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl Data {
-    #[allow(missing_docs)]
+    /// Insert data.
     pub fn insert<D: Any + Send + Sync>(&mut self, data: D) {
         self.0.insert(TypeId::of::<D>(), Box::new(data));
+    }
+}
+
+impl Debug for Data {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_tuple("Data").finish()
     }
 }
 
@@ -142,103 +132,152 @@ pub type ContextSelectionSet<'a> = ContextBase<'a, &'a Positioned<SelectionSet>>
 /// Context object for resolve field
 pub type Context<'a> = ContextBase<'a, &'a Positioned<Field>>;
 
-/// The query path segment
-#[derive(Clone)]
+/// A segment in the path to the current query.
+///
+/// This is a borrowed form of [`PathSegment`](enum.PathSegment.html) used during execution instead
+/// of passed back when errors occur.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(untagged)]
 pub enum QueryPathSegment<'a> {
-    /// Index
+    /// We are currently resolving an element in a list.
     Index(usize),
-
-    /// Field name
+    /// We are currently resolving a field in an object.
     Name(&'a str),
 }
 
-/// The query path node
-#[derive(Clone)]
+/// A path to the current query.
+///
+/// The path is stored as a kind of reverse linked list.
+#[derive(Debug, Clone, Copy)]
 pub struct QueryPathNode<'a> {
-    /// Parent node
+    /// The parent node to this, if there is one.
     pub parent: Option<&'a QueryPathNode<'a>>,
 
-    /// Current path segment
+    /// The current path segment being resolved.
     pub segment: QueryPathSegment<'a>,
 }
 
 impl<'a> serde::Serialize for QueryPathNode<'a> {
-    fn serialize<S>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<<S as Serializer>::Ok, <S as Serializer>::Error>
-    where
-        S: Serializer,
-    {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut seq = serializer.serialize_seq(None)?;
-        self.for_each(|segment| match segment {
-            QueryPathSegment::Index(idx) => {
-                seq.serialize_element(&idx).ok();
-            }
-            QueryPathSegment::Name(name) => {
-                seq.serialize_element(name).ok();
-            }
-        });
+        self.try_for_each(|segment| seq.serialize_element(segment))?;
         seq.end()
     }
 }
 
-impl<'a> std::fmt::Display for QueryPathNode<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'a> Display for QueryPathNode<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut first = true;
-        self.for_each(|segment| {
+        self.try_for_each(|segment| {
             if !first {
-                write!(f, ".").ok();
-            }
-            match segment {
-                QueryPathSegment::Index(idx) => {
-                    write!(f, "{}", *idx).ok();
-                }
-                QueryPathSegment::Name(name) => {
-                    write!(f, "{}", name).ok();
-                }
+                write!(f, ".")?;
             }
             first = false;
-        });
-        Ok(())
+
+            match segment {
+                QueryPathSegment::Index(idx) => write!(f, "{}", *idx),
+                QueryPathSegment::Name(name) => write!(f, "{}", name),
+            }
+        })
     }
 }
 
 impl<'a> QueryPathNode<'a> {
-    pub(crate) fn field_name(&self) -> &str {
-        let mut p = self;
-        loop {
-            if let QueryPathSegment::Name(name) = &p.segment {
-                return name;
-            }
-            p = p.parent.unwrap();
-        }
+    /// Get the current field name.
+    ///
+    /// This traverses all the parents of the node until it finds one that is a field name.
+    pub fn field_name(&self) -> &str {
+        std::iter::once(self)
+            .chain(self.parents())
+            .find_map(|node| match node.segment {
+                QueryPathSegment::Name(name) => Some(name),
+                QueryPathSegment::Index(_) => None,
+            })
+            .unwrap()
+    }
+
+    /// Get the path represented by `Vec<String>`; numbers will be stringified.
+    #[must_use]
+    pub fn to_string_vec(&self) -> Vec<String> {
+        let mut res = Vec::new();
+        self.for_each(|s| {
+            res.push(match s {
+                QueryPathSegment::Name(name) => (*name).to_string(),
+                QueryPathSegment::Index(idx) => idx.to_string(),
+            });
+        });
+        res
+    }
+
+    /// Iterate over the parents of the node.
+    pub fn parents(&self) -> Parents<'_> {
+        Parents(self)
     }
 
     pub(crate) fn for_each<F: FnMut(&QueryPathSegment<'a>)>(&self, mut f: F) {
-        self.for_each_ref(&mut f);
+        let _ = self.try_for_each::<std::convert::Infallible, _>(|segment| {
+            f(segment);
+            Ok(())
+        });
     }
 
-    fn for_each_ref<F: FnMut(&QueryPathSegment<'a>)>(&self, f: &mut F) {
+    pub(crate) fn try_for_each<E, F: FnMut(&QueryPathSegment<'a>) -> Result<(), E>>(
+        &self,
+        mut f: F,
+    ) -> Result<(), E> {
+        self.try_for_each_ref(&mut f)
+    }
+
+    fn try_for_each_ref<E, F: FnMut(&QueryPathSegment<'a>) -> Result<(), E>>(
+        &self,
+        f: &mut F,
+    ) -> Result<(), E> {
         if let Some(parent) = &self.parent {
-            parent.for_each_ref(f);
+            parent.try_for_each_ref(f)?;
         }
-        f(&self.segment);
+        f(&self.segment)
     }
 }
 
-/// Represents the unique id of the resolve
-#[derive(Copy, Clone, Debug)]
+/// An iterator over the parents of a [`QueryPathNode`](struct.QueryPathNode.html).
+#[derive(Debug, Clone)]
+pub struct Parents<'a>(&'a QueryPathNode<'a>);
+
+impl<'a> Parents<'a> {
+    /// Get the current query path node, which the next call to `next` will get the parents of.
+    #[must_use]
+    pub fn current(&self) -> &'a QueryPathNode<'a> {
+        self.0
+    }
+}
+
+impl<'a> Iterator for Parents<'a> {
+    type Item = &'a QueryPathNode<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let parent = self.0.parent;
+        if let Some(parent) = parent {
+            self.0 = parent;
+        }
+        parent
+    }
+}
+
+impl<'a> std::iter::FusedIterator for Parents<'a> {}
+
+/// The unique id of the current resolution.
+#[derive(Debug, Clone, Copy)]
 pub struct ResolveId {
-    /// Parent id
+    /// The unique ID of the parent resolution.
     pub parent: Option<usize>,
 
-    /// Current id
+    /// The current unique id.
     pub current: usize,
 }
 
 impl ResolveId {
-    pub(crate) fn root() -> ResolveId {
+    #[doc(hidden)]
+    pub fn root() -> ResolveId {
         ResolveId {
             parent: None,
             current: 0,
@@ -246,8 +285,8 @@ impl ResolveId {
     }
 }
 
-impl std::fmt::Display for ResolveId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ResolveId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if let Some(parent) = self.parent {
             write!(f, "{}:{}", parent, self.current)
         } else {
@@ -256,52 +295,30 @@ impl std::fmt::Display for ResolveId {
     }
 }
 
-#[doc(hidden)]
-pub type BoxDeferFuture =
-    Pin<Box<dyn Future<Output = Result<(QueryResponse, DeferList)>> + Send + 'static>>;
-
-#[doc(hidden)]
-pub struct DeferList {
-    pub path_prefix: Vec<serde_json::Value>,
-    pub futures: Mutex<Vec<BoxDeferFuture>>,
-}
-
-impl DeferList {
-    pub(crate) fn append<F>(&self, fut: F)
-    where
-        F: Future<Output = Result<(QueryResponse, DeferList)>> + Send + 'static,
-    {
-        self.futures.lock().push(Box::pin(fut));
-    }
-}
-
-/// Query context
+/// Query context.
+///
+/// **This type is not stable and should not be used directly.**
 #[derive(Clone)]
 pub struct ContextBase<'a, T> {
-    #[allow(missing_docs)]
+    /// The current path node being resolved.
     pub path_node: Option<QueryPathNode<'a>>,
     pub(crate) resolve_id: ResolveId,
     pub(crate) inc_resolve_id: &'a AtomicUsize,
     #[doc(hidden)]
     pub item: T,
-    pub(crate) schema_env: &'a SchemaEnv,
-    pub(crate) query_env: &'a QueryEnv,
-    pub(crate) defer_list: Option<&'a DeferList>,
-}
-
-impl<'a, T> Deref for ContextBase<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.item
-    }
+    #[doc(hidden)]
+    pub schema_env: &'a SchemaEnv,
+    #[doc(hidden)]
+    pub query_env: &'a QueryEnv,
 }
 
 #[doc(hidden)]
 pub struct QueryEnvInner {
-    pub extensions: spin::Mutex<Extensions>,
+    pub extensions: Extensions,
     pub variables: Variables,
-    pub document: Document,
+    pub operation: Positioned<OperationDefinition>,
+    pub fragments: HashMap<Name, Positioned<FragmentDefinition>>,
+    pub uploads: Vec<UploadValue>,
     pub ctx_data: Arc<Data>,
 }
 
@@ -319,18 +336,8 @@ impl Deref for QueryEnv {
 
 impl QueryEnv {
     #[doc(hidden)]
-    pub fn new(
-        extensions: spin::Mutex<Extensions>,
-        variables: Variables,
-        document: Document,
-        ctx_data: Arc<Data>,
-    ) -> QueryEnv {
-        QueryEnv(Arc::new(QueryEnvInner {
-            extensions,
-            variables,
-            document,
-            ctx_data,
-        }))
+    pub fn new(inner: QueryEnvInner) -> QueryEnv {
+        QueryEnv(Arc::new(inner))
     }
 
     #[doc(hidden)]
@@ -339,23 +346,23 @@ impl QueryEnv {
         schema_env: &'a SchemaEnv,
         path_node: Option<QueryPathNode<'a>>,
         item: T,
+        resolve_id: ResolveId,
         inc_resolve_id: &'a AtomicUsize,
-        defer_list: Option<&'a DeferList>,
     ) -> ContextBase<'a, T> {
         ContextBase {
             path_node,
-            resolve_id: ResolveId::root(),
+            resolve_id,
             inc_resolve_id,
             item,
             schema_env,
             query_env: self,
-            defer_list,
         }
     }
 }
 
 impl<'a, T> ContextBase<'a, T> {
-    fn get_child_resolve_id(&self) -> ResolveId {
+    #[doc(hidden)]
+    pub fn get_child_resolve_id(&self) -> ResolveId {
         let id = self
             .inc_resolve_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -374,20 +381,13 @@ impl<'a, T> ContextBase<'a, T> {
         ContextBase {
             path_node: Some(QueryPathNode {
                 parent: self.path_node.as_ref(),
-                segment: QueryPathSegment::Name(
-                    field
-                        .alias
-                        .as_ref()
-                        .map(|alias| alias.as_str())
-                        .unwrap_or_else(|| field.name.as_str()),
-                ),
+                segment: QueryPathSegment::Name(&field.node.response_key().node),
             }),
             item: field,
             resolve_id: self.get_child_resolve_id(),
             inc_resolve_id: self.inc_resolve_id,
             schema_env: self.schema_env,
             query_env: self.query_env,
-            defer_list: self.defer_list,
         }
     }
 
@@ -397,13 +397,12 @@ impl<'a, T> ContextBase<'a, T> {
         selection_set: &'a Positioned<SelectionSet>,
     ) -> ContextBase<'a, &'a Positioned<SelectionSet>> {
         ContextBase {
-            path_node: self.path_node.clone(),
+            path_node: self.path_node,
             item: selection_set,
             resolve_id: self.resolve_id,
             inc_resolve_id: &self.inc_resolve_id,
             schema_env: self.schema_env,
             query_env: self.query_env,
-            defer_list: self.defer_list,
         }
     }
 
@@ -411,10 +410,16 @@ impl<'a, T> ContextBase<'a, T> {
     ///
     /// If both `Schema` and `Query` have the same data type, the data in the `Query` is obtained.
     ///
-    /// Returns a FieldError if the specified type data does not exist.
-    pub fn data<D: Any + Send + Sync>(&self) -> FieldResult<&D> {
-        self.data_opt::<D>()
-            .ok_or_else(|| format!("Data `{}` does not exist.", std::any::type_name::<D>()).into())
+    /// # Errors
+    ///
+    /// Returns a `Error` if the specified type data does not exist.
+    pub fn data<D: Any + Send + Sync>(&self) -> Result<&D> {
+        self.data_opt::<D>().ok_or_else(|| {
+            Error::new(format!(
+                "Data `{}` does not exist.",
+                std::any::type_name::<D>()
+            ))
+        })
     }
 
     /// Gets the global data defined in the `Context` or `Schema`.
@@ -427,7 +432,7 @@ impl<'a, T> ContextBase<'a, T> {
             .unwrap_or_else(|| panic!("Data `{}` does not exist.", std::any::type_name::<D>()))
     }
 
-    /// Gets the global data defined in the `Context` or `Schema`, returns `None` if the specified type data does not exist.
+    /// Gets the global data defined in the `Context` or `Schema` or `None` if the specified type data does not exist.
     pub fn data_opt<D: Any + Send + Sync>(&self) -> Option<&D> {
         self.query_env
             .ctx_data
@@ -437,114 +442,65 @@ impl<'a, T> ContextBase<'a, T> {
             .and_then(|d| d.downcast_ref::<D>())
     }
 
-    fn var_value(&self, name: &str, pos: Pos) -> Result<Value> {
-        let def = self
-            .query_env
-            .document
-            .current_operation()
+    fn var_value(&self, name: &str, pos: Pos) -> ServerResult<Value> {
+        self.query_env
+            .operation
+            .node
             .variable_definitions
             .iter()
-            .find(|def| def.name.node == name);
-        if let Some(def) = def {
-            if let Some(var_value) = self.query_env.variables.get(def.name.as_str()) {
-                return Ok(var_value.clone());
-            } else if let Some(default) = &def.default_value {
-                return Ok(default.clone_inner());
-            }
-            match def.var_type.deref() {
-                &async_graphql_parser::query::Type::Named(_)
-                | &async_graphql_parser::query::Type::List(_) => {
-                    // Nullable types can default to null when not given.
-                    return Ok(Value::Null);
-                }
-                &async_graphql_parser::query::Type::NonNull(_) => {
-                    // Strict types can not.
-                }
-            }
-        }
-        Err(QueryError::VarNotDefined {
-            var_name: name.to_string(),
-        }
-        .into_error(pos))
+            .find(|def| def.node.name.node == name)
+            .and_then(|def| {
+                self.query_env
+                    .variables
+                    .0
+                    .get(&def.node.name.node)
+                    .or_else(|| def.node.default_value())
+            })
+            .cloned()
+            .ok_or_else(|| ServerError::new(format!("Variable {} is not defined.", name)).at(pos))
     }
 
-    fn resolve_input_value(&self, value: &mut Value, pos: Pos) -> Result<()> {
-        match value {
-            Value::Variable(var_name) => {
-                *value = self.var_value(&var_name, pos)?;
-                Ok(())
-            }
-            Value::List(ref mut ls) => {
-                for value in ls {
-                    self.resolve_input_value(value, pos)?;
-                }
-                Ok(())
-            }
-            Value::Object(ref mut obj) => {
-                for value in obj.values_mut() {
-                    self.resolve_input_value(value, pos)?;
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
+    fn resolve_input_value(&self, value: Positioned<InputValue>) -> ServerResult<Value> {
+        let pos = value.pos;
+        value
+            .node
+            .into_const_with(|name| self.var_value(&name, pos))
     }
 
     #[doc(hidden)]
-    pub fn is_skip(&self, directives: &[Positioned<Directive>]) -> Result<bool> {
+    pub fn is_ifdef(&self, directives: &[Positioned<Directive>]) -> bool {
+        directives
+            .iter()
+            .any(|directive| directive.node.name.node == "ifdef")
+    }
+
+    #[doc(hidden)]
+    pub fn is_skip(&self, directives: &[Positioned<Directive>]) -> ServerResult<bool> {
         for directive in directives {
-            if directive.name.node == "skip" {
-                if let Some(value) = directive.get_argument("if") {
-                    let mut inner_value = value.clone_inner();
-                    self.resolve_input_value(&mut inner_value, value.pos)?;
-                    match InputValueType::parse(Some(inner_value)) {
-                        Ok(true) => return Ok(true),
-                        Ok(false) => {}
-                        Err(err) => {
-                            return Err(err.into_error(value.pos, bool::qualified_type_name()))
-                        }
-                    }
-                } else {
-                    return Err(QueryError::RequiredDirectiveArgs {
-                        directive: "@skip",
-                        arg_name: "if",
-                        arg_type: "Boolean!",
-                    }
-                    .into_error(directive.position()));
-                }
-            } else if directive.name.node == "include" {
-                if let Some(value) = directive.get_argument("if") {
-                    let mut inner_value = value.clone_inner();
-                    self.resolve_input_value(&mut inner_value, value.pos)?;
-                    match InputValueType::parse(Some(inner_value)) {
-                        Ok(false) => return Ok(true),
-                        Ok(true) => {}
-                        Err(err) => {
-                            return Err(err.into_error(value.pos, bool::qualified_type_name()))
-                        }
-                    }
-                } else {
-                    return Err(QueryError::RequiredDirectiveArgs {
-                        directive: "@include",
-                        arg_name: "if",
-                        arg_type: "Boolean!",
-                    }
-                    .into_error(directive.position()));
-                }
+            let include = match &*directive.node.name.node {
+                "skip" => false,
+                "include" => true,
+                _ => continue,
+            };
+
+            let condition_input = directive
+                .node
+                .get_argument("if")
+                .ok_or_else(|| ServerError::new(format!(r#"Directive @{} requires argument `if` of type `Boolean!` but it was not provided."#, if include { "include" } else { "skip" })).at(directive.pos))?
+                .clone();
+
+            let pos = condition_input.pos;
+            let condition_input = self.resolve_input_value(condition_input)?;
+
+            if include
+                != <bool as InputType>::parse(Some(condition_input))
+                    .map_err(|e| e.into_server_error().at(pos))?
+            {
+                return Ok(true);
             }
         }
 
         Ok(false)
-    }
-
-    #[doc(hidden)]
-    pub fn is_defer(&self, directives: &[Positioned<Directive>]) -> bool {
-        directives.iter().any(|d| d.name.node == "defer")
-    }
-
-    #[doc(hidden)]
-    pub fn is_stream(&self, directives: &[Positioned<Directive>]) -> bool {
-        directives.iter().any(|d| d.name.node == "stream")
     }
 }
 
@@ -561,55 +517,28 @@ impl<'a> ContextBase<'a, &'a Positioned<SelectionSet>> {
             inc_resolve_id: self.inc_resolve_id,
             schema_env: self.schema_env,
             query_env: self.query_env,
-            defer_list: self.defer_list,
         }
     }
 }
 
 impl<'a> ContextBase<'a, &'a Positioned<Field>> {
     #[doc(hidden)]
-    pub fn param_value<T: InputValueType>(
+    pub fn param_value<T: InputType>(
         &self,
         name: &str,
         default: Option<fn() -> T>,
-    ) -> Result<T> {
-        let value = self.get_argument(name).cloned();
-        if let Some(default) = default {
-            if value.is_none() {
+    ) -> ServerResult<T> {
+        let value = self.item.node.get_argument(name).cloned();
+        if value.is_none() {
+            if let Some(default) = default {
                 return Ok(default());
             }
         }
-        let pos = value
-            .as_ref()
-            .map(|value| value.position())
-            .unwrap_or_default();
-        let value = match value {
-            Some(value) => {
-                let mut new_value = value.into_inner();
-                self.resolve_input_value(&mut new_value, pos)?;
-                Some(new_value)
-            }
-            None => None,
+        let (pos, value) = match value {
+            Some(value) => (value.pos, Some(self.resolve_input_value(value)?)),
+            None => (Pos::default(), None),
         };
-
-        match InputValueType::parse(value) {
-            Ok(res) => Ok(res),
-            Err(err) => Err(err.into_error(pos, T::qualified_type_name())),
-        }
-    }
-
-    #[doc(hidden)]
-    pub fn result_name(&self) -> &str {
-        self.item
-            .alias
-            .as_ref()
-            .map(|alias| alias.as_str())
-            .unwrap_or_else(|| self.item.name.as_str())
-    }
-
-    /// Get the position of the current field in the query code.
-    pub fn position(&self) -> Pos {
-        self.pos
+        InputType::parse(value).map_err(|e| e.into_server_error().at(pos))
     }
 
     /// Creates a uniform interface to inspect the forthcoming selections.
@@ -619,13 +548,13 @@ impl<'a> ContextBase<'a, &'a Positioned<Field>> {
     /// ```no_run
     /// use async_graphql::*;
     ///
-    /// #[SimpleObject]
+    /// #[derive(SimpleObject)]
     /// struct Detail {
     ///     c: i32,
     ///     d: i32,
     /// }
     ///
-    /// #[SimpleObject]
+    /// #[derive(SimpleObject)]
     /// struct MyObj {
     ///     a: i32,
     ///     b: i32,
@@ -649,9 +578,107 @@ impl<'a> ContextBase<'a, &'a Positioned<Field>> {
     /// }
     /// ```
     pub fn look_ahead(&self) -> Lookahead {
-        Lookahead {
-            document: &self.query_env.document,
-            field: Some(&self.item.node),
+        Lookahead::new(&self.query_env.fragments, &self.item.node)
+    }
+
+    /// Get the current field.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use async_graphql::*;
+    ///
+    /// #[derive(SimpleObject)]
+    /// struct MyObj {
+    ///     a: i32,
+    ///     b: i32,
+    ///     c: i32,
+    /// }
+    ///
+    /// pub struct Query;
+    ///
+    /// #[Object]
+    /// impl Query {
+    ///     async fn obj(&self, ctx: &Context<'_>) -> MyObj {
+    ///         let fields = ctx.field().selection_set().map(|field| field.name()).collect::<Vec<_>>();
+    ///         assert_eq!(fields, vec!["a", "b", "c"]);
+    ///         MyObj { a: 1, b: 2, c: 3 }
+    ///     }
+    /// }
+    ///
+    /// async_std::task::block_on(async move {
+    ///     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
+    ///     assert!(schema.execute("{ obj { a b c }}").await.is_ok());
+    ///     assert!(schema.execute("{ obj { a ... { b c } }}").await.is_ok());
+    ///     assert!(schema.execute("{ obj { a ... BC }} fragment BC on MyObj { b c }").await.is_ok());
+    /// });
+    ///
+    /// ```
+    pub fn field(&self) -> SelectionField<'a> {
+        SelectionField {
+            fragments: &self.query_env.fragments,
+            field: &self.item.node,
+        }
+    }
+}
+
+/// Selection field.
+pub struct SelectionField<'a> {
+    fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
+    field: &'a Field,
+}
+
+impl<'a> SelectionField<'a> {
+    /// Get the name of this field.
+    pub fn name(&self) -> &'a str {
+        self.field.name.node.as_str()
+    }
+
+    /// Get all subfields of the current selection set.
+    pub fn selection_set(&self) -> impl Iterator<Item = SelectionField<'a>> {
+        SelectionFieldsIter {
+            fragments: self.fragments,
+            iter: vec![self.field.selection_set.node.items.iter()],
+        }
+    }
+}
+
+struct SelectionFieldsIter<'a> {
+    fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
+    iter: Vec<std::slice::Iter<'a, Positioned<Selection>>>,
+}
+
+impl<'a> Iterator for SelectionFieldsIter<'a> {
+    type Item = SelectionField<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let it = self.iter.last_mut()?;
+            match it.next() {
+                Some(selection) => match &selection.node {
+                    Selection::Field(field) => {
+                        return Some(SelectionField {
+                            fragments: self.fragments,
+                            field: &field.node,
+                        });
+                    }
+                    Selection::FragmentSpread(fragment_spread) => {
+                        if let Some(fragment) =
+                            self.fragments.get(&fragment_spread.node.fragment_name.node)
+                        {
+                            self.iter
+                                .push(fragment.node.selection_set.node.items.iter());
+                        }
+                    }
+                    Selection::InlineFragment(inline_fragment) => {
+                        self.iter
+                            .push(inline_fragment.node.selection_set.node.items.iter());
+                    }
+                },
+                None => {
+                    self.iter.pop();
+                }
+            }
         }
     }
 }

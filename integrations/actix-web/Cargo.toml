@@ -1,0 +1,28 @@
+[package]
+name = "async-graphql-actix-web"
+version = "2.4.3"
+authors = ["sunli <scott_s829@163.com>", "Koxiaet"]
+edition = "2018"
+description = "async-graphql for actix-web"
+license = "MIT/Apache-2.0"
+documentation = "https://docs.rs/async-graphql-actix-web/"
+homepage = "https://github.com/async-graphql/async-graphql"
+repository = "https://github.com/async-graphql/async-graphql"
+keywords = ["futures", "async", "graphql"]
+categories = ["network-programming", "asynchronous"]
+
+[dependencies]
+async-graphql = { path = "../..", version = "=2.4.3" }
+
+actix = "0.10.0"
+actix-http = "2.0.0"
+actix-web = { version = "3.1.0", default-features = false }
+actix-web-actors = "3.0.0"
+async-channel = "1.5.1"
+futures-util = { version = "0.3.8", default-features = false }
+serde_json = "1.0.59"
+serde_urlencoded = "0.7.0"
+
+[dev-dependencies]
+actix-rt = "1.1.1"
+async-mutex = "1.4.0"

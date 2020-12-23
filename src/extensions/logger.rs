@@ -1,135 +1,117 @@
-use crate::extensions::{Extension, ResolveInfo};
-use crate::{Error, Variables};
-use async_graphql_parser::query::{Definition, Document, OperationDefinition, Selection};
-use uuid::Uuid;
+use std::fmt::{self, Display, Formatter};
+
+use log::{error, info, trace};
+
+use crate::extensions::{Extension, ExtensionContext, ExtensionFactory, ResolveInfo};
+use crate::parser::types::{ExecutableDocument, OperationType, Selection};
+use crate::{PathSegment, ServerError, Variables};
 
 /// Logger extension
-pub struct Logger {
-    id: Uuid,
+#[cfg_attr(feature = "nightly", doc(cfg(feature = "log")))]
+pub struct Logger;
+
+impl ExtensionFactory for Logger {
+    fn create(&self) -> Box<dyn Extension> {
+        Box::new(LoggerExtension {
+            enabled: true,
+            query: String::new(),
+            variables: Default::default(),
+        })
+    }
+}
+
+struct LoggerExtension {
     enabled: bool,
     query: String,
     variables: Variables,
 }
 
-impl Default for Logger {
-    fn default() -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            enabled: true,
-            query: String::new(),
-            variables: Default::default(),
-        }
-    }
-}
-
-impl Extension for Logger {
-    fn parse_start(&mut self, query_source: &str, variables: &Variables) {
+impl Extension for LoggerExtension {
+    fn parse_start(
+        &mut self,
+        _ctx: &ExtensionContext<'_>,
+        query_source: &str,
+        variables: &Variables,
+    ) {
         self.query = query_source.replace(char::is_whitespace, "");
         self.variables = variables.clone();
     }
 
-    fn parse_end(&mut self, document: &Document) {
-        let mut is_schema = false;
-
-        for definition in document.definitions() {
-            if let Definition::Operation(operation) = &definition.node {
-                let selection_set = match &operation.node {
-                    OperationDefinition::Query(query) => &query.selection_set,
-                    OperationDefinition::SelectionSet(selection_set) => &selection_set.node,
-                    _ => continue,
-                };
-                is_schema = selection_set.items.iter().any(|selection| {
-                    if let Selection::Field(field) = &selection.node {
-                        if field.name.as_str() == "__schema" {
-                            return true;
-                        }
-                    }
-                    false
-                });
-                if is_schema {
-                    break;
-                }
-            }
-        }
+    fn parse_end(&mut self, _ctx: &ExtensionContext<'_>, document: &ExecutableDocument) {
+        let is_schema = document
+            .operations
+            .iter()
+            .filter(|(_, operation)| operation.node.ty == OperationType::Query)
+            .any(|(_, operation)| operation.node.selection_set.node.items.iter().any(|selection| matches!(&selection.node, Selection::Field(field) if field.node.name.node == "__schema")));
 
         if is_schema {
             self.enabled = false;
             return;
         }
 
-        info!(
-            target = "async-graphql",
-            "Query",
-            id = self.id,
-            source = self.query,
-            variables = self.variables
-        );
+        info!(target: "async-graphql", "[Query] query: \"{}\", variables: {}", &self.query, self.variables);
     }
 
-    fn resolve_start(&mut self, info: &ResolveInfo<'_>) {
+    fn resolve_start(&mut self, _ctx: &ExtensionContext<'_>, info: &ResolveInfo<'_>) {
         if !self.enabled {
             return;
         }
-
-        trace!(
-            target = "async-graphql",
-            "Resolve start",
-            id = self.id,
-            path = info.path_node
-        );
+        trace!(target: "async-graphql", "[ResolveStart] path: \"{}\"", info.path_node);
     }
 
-    fn resolve_end(&mut self, info: &ResolveInfo<'_>) {
+    fn resolve_end(&mut self, _ctx: &ExtensionContext<'_>, info: &ResolveInfo<'_>) {
         if !self.enabled {
             return;
         }
-
-        trace!(
-            target = "async-graphql",
-            "Resolve end",
-            id = self.id,
-            path = info.path_node
-        );
+        trace!(target: "async-graphql", "[ResolveEnd] path: \"{}\"", info.path_node);
     }
 
-    fn error(&mut self, err: &Error) {
-        match err {
-            Error::Parse(err) => {
-                error!(
-                    target = "async-graphql",
-                    "Parse error",
-                    id = self.id,
-                    pos = err.pos,
-                    query = self.query,
-                    variables = self.variables,
-                    message = err.message
-                );
-            }
-            Error::Query { pos, path, err } => {
-                error!(
-                    target = "async-graphql",
-                    "Query error",
-                    id = self.id,
-                    pos = pos,
-                    path = path,
-                    query = self.query,
-                    variables = self.variables,
-                    error = err,
-                );
-            }
-            Error::Rule { errors } => {
-                for err in errors {
-                    error!(
-                        target = "async-graphql",
-                        "Validation error",
-                        id = self.id,
-                        pos = err.locations,
-                        query = self.query,
-                        variables = self.variables,
-                        error = err.message,
-                    );
+    fn error(&mut self, _ctx: &ExtensionContext<'_>, err: &ServerError) {
+        struct DisplayError<'a> {
+            log: &'a LoggerExtension,
+            e: &'a ServerError,
+        };
+        impl<'a> Display for DisplayError<'a> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                write!(f, "[Error] ")?;
+
+                if !self.e.path.is_empty() {
+                    write!(f, "path: ")?;
+                    for (i, segment) in self.e.path.iter().enumerate() {
+                        if i != 0 {
+                            write!(f, ".")?;
+                        }
+
+                        match segment {
+                            PathSegment::Field(field) => write!(f, "{}", field),
+                            PathSegment::Index(i) => write!(f, "{}", i),
+                        }?;
+                    }
+                    write!(f, ", ")?;
                 }
+                if !self.e.locations.is_empty() {
+                    write!(f, "pos: [")?;
+                    for (i, location) in self.e.locations.iter().enumerate() {
+                        if i != 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}:{}", location.line, location.column)?;
+                    }
+                    write!(f, "], ")?;
+                }
+                write!(f, r#"query: "{}", "#, self.log.query)?;
+                write!(f, "variables: {}", self.log.variables)?;
+                write!(f, "{}", self.e.message)
             }
         }
+
+        error!(
+            target: "async-graphql",
+            "{}",
+            DisplayError {
+                log: self,
+                e: err,
+            }
+        );
     }
 }

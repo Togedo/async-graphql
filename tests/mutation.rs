@@ -1,5 +1,5 @@
 use async_graphql::*;
-use futures::lock::Mutex;
+use async_std::sync::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,8 +7,14 @@ use std::time::Duration;
 pub async fn test_mutation_execution_order() {
     type List = Arc<Mutex<Vec<i32>>>;
 
-    #[SimpleObject]
     struct QueryRoot;
+
+    #[Object]
+    impl QueryRoot {
+        async fn value(&self) -> i32 {
+            10
+        }
+    }
 
     struct MutationRoot;
 
@@ -31,18 +37,21 @@ pub async fn test_mutation_execution_order() {
     let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
         .data(list.clone())
         .finish();
-    schema
-        .execute("mutation { append1 append2 }")
-        .await
-        .unwrap();
+    schema.execute("mutation { append1 append2 }").await;
     assert_eq!(list.lock().await[0], 1);
     assert_eq!(list.lock().await[1], 2);
 }
 
 #[async_std::test]
 pub async fn test_mutation_fragment() {
-    #[SimpleObject]
     struct QueryRoot;
+
+    #[Object]
+    impl QueryRoot {
+        async fn value(&self) -> i32 {
+            10
+        }
+    }
 
     struct MutationRoot;
 
@@ -66,11 +75,10 @@ pub async fn test_mutation_fragment() {
             }
         }"#,
         )
-        .await
-        .unwrap();
+        .await;
     assert_eq!(
         resp.data,
-        serde_json::json!({
+        value!({
             "actionInUnnamedFragment": true,
             "actionInNamedFragment": true,
         })

@@ -1,23 +1,25 @@
-use crate::model::{__Schema, __Type};
-use crate::scalars::Any;
-use crate::{
-    do_resolve, registry, Context, ContextSelectionSet, Error, ObjectType, OutputValueType,
-    Positioned, QueryError, Result, Type,
-};
-use async_graphql_derive::SimpleObject;
-use async_graphql_parser::query::Field;
-use indexmap::map::IndexMap;
 use std::borrow::Cow;
 
+use indexmap::map::IndexMap;
+
+use crate::model::{__Schema, __Type};
+use crate::parser::types::Field;
+use crate::resolver_utils::{resolve_container, ContainerType};
+use crate::{
+    registry, Any, Context, ContextSelectionSet, ObjectType, OutputType, Positioned, ServerError,
+    ServerResult, SimpleObject, Type, Value,
+};
+
 /// Federation service
-#[SimpleObject(internal, name = "_Service")]
+#[derive(SimpleObject)]
+#[graphql(internal, name = "_Service")]
 struct Service {
     sdl: Option<String>,
 }
 
-pub struct QueryRoot<T> {
-    pub inner: T,
-    pub disable_introspection: bool,
+pub(crate) struct QueryRoot<T> {
+    pub(crate) inner: T,
+    pub(crate) disable_introspection: bool,
 }
 
 impl<T: Type> Type for QueryRoot<T> {
@@ -43,6 +45,8 @@ impl<T: Type> Type for QueryRoot<T> {
                     external: false,
                     requires: None,
                     provides: None,
+                    visible: None,
+                    compute_complexity: None,
                 },
             );
 
@@ -61,6 +65,7 @@ impl<T: Type> Type for QueryRoot<T> {
                                 ty: "String!".to_string(),
                                 default_value: None,
                                 validator: None,
+                                visible: None,
                             },
                         );
                         args
@@ -71,6 +76,8 @@ impl<T: Type> Type for QueryRoot<T> {
                     external: false,
                     requires: None,
                     provides: None,
+                    visible: None,
+                    compute_complexity: None,
                 },
             );
         }
@@ -79,62 +86,61 @@ impl<T: Type> Type for QueryRoot<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: ObjectType + Send + Sync> ObjectType for QueryRoot<T> {
-    async fn resolve_field(&self, ctx: &Context<'_>) -> Result<serde_json::Value> {
-        if ctx.name.node == "__schema" {
+impl<T: ObjectType + Send + Sync> ContainerType for QueryRoot<T> {
+    async fn resolve_field(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
+        if ctx.item.node.name.node == "__schema" {
             if self.disable_introspection {
-                return Err(Error::Query {
-                    pos: ctx.position(),
-                    path: ctx
-                        .path_node
-                        .as_ref()
-                        .and_then(|path| serde_json::to_value(path).ok()),
-                    err: QueryError::FieldNotFound {
-                        field_name: ctx.name.to_string(),
-                        object: Self::type_name().to_string(),
-                    },
-                });
+                return Err(ServerError::new("Query introspection is disabled.").at(ctx.item.pos));
             }
 
-            let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-            return OutputValueType::resolve(
+            let ctx_obj = ctx.with_selection_set(&ctx.item.node.selection_set);
+            return OutputType::resolve(
                 &__Schema {
                     registry: &ctx.schema_env.registry,
                 },
                 &ctx_obj,
                 ctx.item,
             )
-            .await;
-        } else if ctx.name.node == "__type" {
+            .await
+            .map(Some);
+        } else if ctx.item.node.name.node == "__type" {
             let type_name: String = ctx.param_value("name", None)?;
-            let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-            return OutputValueType::resolve(
+            let ctx_obj = ctx.with_selection_set(&ctx.item.node.selection_set);
+            return OutputType::resolve(
                 &ctx.schema_env
                     .registry
                     .types
                     .get(&type_name)
+                    .filter(|ty| ty.is_visible(ctx))
                     .map(|ty| __Type::new_simple(&ctx.schema_env.registry, ty)),
                 &ctx_obj,
                 ctx.item,
             )
-            .await;
-        } else if ctx.name.node == "_entities" {
+            .await
+            .map(Some);
+        } else if ctx.item.node.name.node == "_entities" {
             let representations: Vec<Any> = ctx.param_value("representations", None)?;
             let mut res = Vec::new();
             for item in representations {
-                res.push(self.inner.find_entity(ctx, &item.0).await?);
+                res.push(
+                    self.inner
+                        .find_entity(ctx, &item.0)
+                        .await?
+                        .ok_or_else(|| ServerError::new("Entity not found.").at(ctx.item.pos))?,
+                );
             }
-            return Ok(res.into());
-        } else if ctx.name.node == "_service" {
-            let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-            return OutputValueType::resolve(
+            return Ok(Some(Value::List(res)));
+        } else if ctx.item.node.name.node == "_service" {
+            let ctx_obj = ctx.with_selection_set(&ctx.item.node.selection_set);
+            return OutputType::resolve(
                 &Service {
-                    sdl: Some(ctx.schema_env.registry.create_federation_sdl()),
+                    sdl: Some(ctx.schema_env.registry.export_sdl(true)),
                 },
                 &ctx_obj,
                 ctx.item,
             )
-            .await;
+            .await
+            .map(Some);
         }
 
         self.inner.resolve_field(ctx).await
@@ -142,12 +148,14 @@ impl<T: ObjectType + Send + Sync> ObjectType for QueryRoot<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: ObjectType + Send + Sync> OutputValueType for QueryRoot<T> {
+impl<T: ObjectType + Send + Sync> OutputType for QueryRoot<T> {
     async fn resolve(
         &self,
         ctx: &ContextSelectionSet<'_>,
         _field: &Positioned<Field>,
-    ) -> Result<serde_json::Value> {
-        do_resolve(ctx, self).await
+    ) -> ServerResult<Value> {
+        resolve_container(ctx, self).await
     }
 }
+
+impl<T: ObjectType + Send + Sync> ObjectType for QueryRoot<T> {}

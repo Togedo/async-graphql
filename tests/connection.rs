@@ -5,12 +5,12 @@ use async_graphql::*;
 pub async fn test_connection_additional_fields() {
     struct QueryRoot;
 
-    #[SimpleObject]
+    #[derive(SimpleObject)]
     struct ConnectionFields {
         total_count: i32,
     }
 
-    #[SimpleObject]
+    #[derive(SimpleObject)]
     struct Diff {
         diff: i32,
     }
@@ -23,7 +23,7 @@ pub async fn test_connection_additional_fields() {
             before: Option<String>,
             first: Option<i32>,
             last: Option<i32>,
-        ) -> FieldResult<Connection<usize, i32, ConnectionFields, Diff>> {
+        ) -> Result<Connection<usize, i32, ConnectionFields, Diff>> {
             connection::query(
                 after,
                 before,
@@ -43,7 +43,7 @@ pub async fn test_connection_additional_fields() {
                         end < 10000,
                         ConnectionFields { total_count: 10000 },
                     );
-                    connection.append((start..end).into_iter().map(|n| {
+                    connection.append((start..end).map(|n| {
                         Edge::with_additional_fields(
                             n,
                             n as i32,
@@ -65,9 +65,8 @@ pub async fn test_connection_additional_fields() {
         schema
             .execute("{ numbers(first: 2) { totalCount edges { node diff } } }")
             .await
-            .unwrap()
             .data,
-        serde_json::json!({
+        value!({
             "numbers": {
                 "totalCount": 10000,
                 "edges": [
@@ -82,9 +81,8 @@ pub async fn test_connection_additional_fields() {
         schema
             .execute("{ numbers(last: 2) { edges { node diff } } }")
             .await
-            .unwrap()
             .data,
-        serde_json::json!({
+        value!({
             "numbers": {
                 "edges": [
                     {"node": 9998, "diff": 2},

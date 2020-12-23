@@ -1,11 +1,13 @@
-use crate::parser::query::{
-    Document, FragmentDefinition, FragmentSpread, OperationDefinition, Type, VariableDefinition,
+use std::collections::{HashMap, HashSet};
+
+use crate::parser::types::{
+    ExecutableDocument, FragmentDefinition, FragmentSpread, OperationDefinition, VariableDefinition,
 };
 use crate::registry::MetaTypeName;
-use crate::validation::utils::{operation_name, Scope};
+use crate::validation::utils::Scope;
 use crate::validation::visitor::{Visitor, VisitorContext};
-use crate::{Pos, Positioned, Value};
-use std::collections::{HashMap, HashSet};
+use crate::{Name, Pos, Positioned};
+use async_graphql_value::Value;
 
 #[derive(Default)]
 pub struct VariableInAllowedPosition<'a> {
@@ -31,20 +33,22 @@ impl<'a> VariableInAllowedPosition<'a> {
 
         if let Some(usages) = self.variable_usages.get(from) {
             for (var_name, usage_pos, var_type) in usages {
-                if let Some(def) = var_defs.iter().find(|def| def.name.node == *var_name) {
-                    let expected_type = match (&def.default_value, &def.var_type.node) {
-                        (Some(_), Type::List(_)) => def.var_type.to_string() + "!",
-                        (Some(_), Type::Named(_)) => def.var_type.to_string() + "!",
-                        (_, _) => def.var_type.to_string(),
-                    };
+                if let Some(def) = var_defs.iter().find(|def| def.node.name.node == *var_name) {
+                    let expected_type =
+                        if def.node.var_type.node.nullable && def.node.default_value.is_some() {
+                            // A nullable type with a default value functions as a non-nullable
+                            format!("{}!", def.node.var_type.node)
+                        } else {
+                            def.node.var_type.node.to_string()
+                        };
 
                     if !var_type.is_subtype(&MetaTypeName::create(&expected_type)) {
                         ctx.report_error(
-                            vec![def.position(), *usage_pos],
+                            vec![def.pos, *usage_pos],
                             format!(
-                            "Variable \"{}\" of type \"{}\" used in position expecting type \"{}\"",
-                            var_name, var_type, expected_type
-                        ),
+                                "Variable \"{}\" of type \"{}\" used in position expecting type \"{}\"",
+                                var_name, var_type, expected_type
+                            ),
                         );
                     }
                 }
@@ -60,7 +64,7 @@ impl<'a> VariableInAllowedPosition<'a> {
 }
 
 impl<'a> Visitor<'a> for VariableInAllowedPosition<'a> {
-    fn exit_document(&mut self, ctx: &mut VisitorContext<'a>, _doc: &'a Document) {
+    fn exit_document(&mut self, ctx: &mut VisitorContext<'a>, _doc: &'a ExecutableDocument) {
         for (op_scope, var_defs) in &self.variable_defs {
             self.collect_incorrect_usages(op_scope, var_defs, ctx, &mut HashSet::new());
         }
@@ -69,18 +73,19 @@ impl<'a> Visitor<'a> for VariableInAllowedPosition<'a> {
     fn enter_operation_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
-        operation_definition: &'a Positioned<OperationDefinition>,
+        name: Option<&'a Name>,
+        _operation_definition: &'a Positioned<OperationDefinition>,
     ) {
-        let (op_name, _) = operation_name(operation_definition);
-        self.current_scope = Some(Scope::Operation(op_name));
+        self.current_scope = Some(Scope::Operation(name.map(Name::as_str)));
     }
 
     fn enter_fragment_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
-        fragment_definition: &'a Positioned<FragmentDefinition>,
+        name: &'a Name,
+        _fragment_definition: &'a Positioned<FragmentDefinition>,
     ) {
-        self.current_scope = Some(Scope::Fragment(fragment_definition.name.as_str()));
+        self.current_scope = Some(Scope::Fragment(name));
     }
 
     fn enter_variable_definition(
@@ -105,7 +110,7 @@ impl<'a> Visitor<'a> for VariableInAllowedPosition<'a> {
             self.spreads
                 .entry(scope.clone())
                 .or_insert_with(HashSet::new)
-                .insert(fragment_spread.fragment_name.as_str());
+                .insert(&fragment_spread.node.fragment_name.node);
         }
     }
 
@@ -132,7 +137,6 @@ impl<'a> Visitor<'a> for VariableInAllowedPosition<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory<'a>() -> VariableInAllowedPosition<'a> {
         VariableInAllowedPosition::default()

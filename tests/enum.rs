@@ -2,13 +2,13 @@ use async_graphql::*;
 
 #[async_std::test]
 pub async fn test_enum_type() {
-    #[Enum]
+    #[derive(Enum, Copy, Clone, Eq, PartialEq)]
     enum MyEnum {
         A,
         B,
     }
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct MyInput {
         value: MyEnum,
     }
@@ -33,16 +33,15 @@ pub async fn test_enum_type() {
     }
 
     let schema = Schema::new(Root { value: MyEnum::A }, EmptyMutation, EmptySubscription);
-    let query = format!(
-        r#"{{
+    let query = r#"{
             value
             testArg(input: A)
-            testInput(input: {{value: B}}) }}
-            "#
-    );
+            testInput(input: {value: B})
+        }"#
+    .to_owned();
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(&query).await.data,
+        value!({
             "value": "A",
             "testArg": "A",
             "testInput": "B",
@@ -52,10 +51,9 @@ pub async fn test_enum_type() {
 
 #[async_std::test]
 pub async fn test_enum_derive_and_item_attributes() {
-    use serde_derive::Deserialize;
+    use serde::Deserialize;
 
-    #[async_graphql::Enum]
-    #[derive(Deserialize, Debug)]
+    #[derive(Deserialize, Debug, Enum, Copy, Clone, Eq, PartialEq)]
     enum Test {
         #[serde(alias = "Other")]
         Real,
@@ -68,7 +66,29 @@ pub async fn test_enum_derive_and_item_attributes() {
     }
 
     assert_eq!(
-        serde_json::from_str::<TestStruct>(r#"{ "value" : "Other" }"#).unwrap(),
+        from_value::<TestStruct>(value!({"value": "Other"})).unwrap(),
         TestStruct { value: Test::Real }
     );
+}
+
+#[async_std::test]
+pub async fn test_remote_enum() {
+    #[derive(Enum, Copy, Clone, Eq, PartialEq)]
+    #[graphql(remote = "remote::RemoteEnum")]
+    enum LocalEnum {
+        A,
+        B,
+        C,
+    }
+
+    mod remote {
+        pub enum RemoteEnum {
+            A,
+            B,
+            C,
+        }
+    }
+
+    let _: remote::RemoteEnum = LocalEnum::A.into();
+    let _: LocalEnum = remote::RemoteEnum::A.into();
 }

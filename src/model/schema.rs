@@ -1,23 +1,27 @@
 use crate::model::{__Directive, __Type};
-use crate::registry;
-use async_graphql_derive::Object;
-use itertools::Itertools;
+use crate::{registry, Context, Object};
 
 pub struct __Schema<'a> {
     pub registry: &'a registry::Registry,
 }
 
 /// A GraphQL Schema defines the capabilities of a GraphQL server. It exposes all available types and directives on the server, as well as the entry points for query, mutation, and subscription operations.
-#[Object(internal)]
+#[Object(internal, name = "__Schema")]
 impl<'a> __Schema<'a> {
     /// A list of all types supported by this server.
-    async fn types(&self) -> Vec<__Type<'a>> {
-        let mut types = self
+    async fn types(&self, ctx: &Context<'_>) -> Vec<__Type<'a>> {
+        let mut types: Vec<_> = self
             .registry
             .types
             .values()
-            .map(|ty| (ty.name(), __Type::new_simple(self.registry, ty)))
-            .collect_vec();
+            .filter_map(|ty| {
+                if ty.is_visible(ctx) {
+                    Some((ty.name(), __Type::new_simple(self.registry, ty)))
+                } else {
+                    None
+                }
+            })
+            .collect();
         types.sort_by(|a, b| a.0.cmp(b.0));
         types.into_iter().map(|(_, ty)| ty).collect()
     }
@@ -50,7 +54,7 @@ impl<'a> __Schema<'a> {
 
     /// A list of all directives supported by this server.
     async fn directives(&self) -> Vec<__Directive<'a>> {
-        let mut directives = self
+        let mut directives: Vec<_> = self
             .registry
             .directives
             .values()
@@ -58,7 +62,7 @@ impl<'a> __Schema<'a> {
                 registry: &self.registry,
                 directive,
             })
-            .collect_vec();
+            .collect();
         directives.sort_by(|a, b| a.directive.name.cmp(b.directive.name));
         directives
     }

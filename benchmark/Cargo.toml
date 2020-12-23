@@ -1,14 +1,14 @@
 [package]
 name = "graphql-benchmark"
-version = "1.14.13"
-authors = ["sunli <scott_s829@163.com>"]
+version = "2.0.4"
+authors = ["sunli <scott_s829@163.com>", "Koxiaet"]
 edition = "2018"
 
 [dependencies]
-async-std = { version = "1.5.0", features = ["attributes"] }
-futures = "0.3.4"
+async-std = { version = "1.6.5", features = ["attributes"] }
+futures = "0.3.6"
 serde_json = "*"
-async-graphql-parser = { path = "../async-graphql-parser" }
+async-graphql-parser = { path = "../parser" }
 async-graphql = { path = ".." }
 jemallocator = { version = "0.3.2", optional = true }
 

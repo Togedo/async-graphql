@@ -1,4 +1,5 @@
 use async_graphql::*;
+use std::collections::HashMap;
 
 #[async_std::test]
 pub async fn test_variables() {
@@ -16,7 +17,7 @@ pub async fn test_variables() {
     }
 
     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
-    let query = QueryBuilder::new(
+    let query = Request::new(
         r#"
             query QueryWithVariables($intVal: Int!, $intListVal: [Int!]!) {
                 intVal(value: $intVal)
@@ -24,17 +25,14 @@ pub async fn test_variables() {
             }
         "#,
     )
-    .variables(
-        Variables::parse_from_json(serde_json::json!({
-            "intVal": 10,
-             "intListVal": [1, 2, 3, 4, 5],
-        }))
-        .unwrap(),
-    );
-    let resp = query.execute(&schema).await.unwrap();
+    .variables(Variables::from_value(value!({
+        "intVal": 10,
+         "intListVal": [1, 2, 3, 4, 5],
+    })));
+
     assert_eq!(
-        resp.data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "intVal": 10,
             "intListVal": [1, 2, 3, 4, 5],
         })
@@ -53,19 +51,18 @@ pub async fn test_variable_default_value() {
     }
 
     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
-    let resp = schema
-        .execute(
-            r#"
+    assert_eq!(
+        schema
+            .execute(
+                r#"
             query QueryWithVariables($intVal: Int = 10) {
                 intVal(value: $intVal)
             }
-        "#,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.data,
-        serde_json::json!({
+        "#
+            )
+            .await
+            .data,
+        value!({
             "intVal": 10,
         })
     );
@@ -83,18 +80,20 @@ pub async fn test_variable_no_value() {
     }
 
     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
-    let query = QueryBuilder::new(
-        r#"
+    let resp = schema
+        .execute(Request::new(
+            r#"
             query QueryWithVariables($intVal: Int) {
                 intVal(value: $intVal)
             }
         "#,
-    )
-    .variables(Variables::parse_from_json(serde_json::json!({})).unwrap());
-    let resp = query.execute(&schema).await.unwrap();
+        ))
+        .await
+        .into_result()
+        .unwrap();
     assert_eq!(
         resp.data,
-        serde_json::json!({
+        value!({
             "intVal": 10,
         })
     );
@@ -112,23 +111,20 @@ pub async fn test_variable_null() {
     }
 
     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
-    let query = QueryBuilder::new(
+    let query = Request::new(
         r#"
             query QueryWithVariables($intVal: Int) {
                 intVal(value: $intVal)
             }
         "#,
     )
-    .variables(
-        Variables::parse_from_json(serde_json::json!({
-            "intVal": null,
-        }))
-        .unwrap(),
-    );
-    let resp = query.execute(&schema).await.unwrap();
+    .variables(Variables::from_value(value!({
+        "intVal": null,
+    })));
+    let resp = schema.execute(query).await;
     assert_eq!(
         resp.data,
-        serde_json::json!({
+        value!({
             "intVal": 10,
         })
     );
@@ -136,7 +132,7 @@ pub async fn test_variable_null() {
 
 #[async_std::test]
 pub async fn test_variable_in_input_object() {
-    #[InputObject]
+    #[derive(InputObject)]
     struct MyInput {
         value: i32,
     }
@@ -171,19 +167,14 @@ pub async fn test_variable_in_input_object() {
         query TestQuery($value: Int!) {
             test(input: {value: $value })
         }"#;
-        let resp = QueryBuilder::new(query)
-            .variables(
-                Variables::parse_from_json(serde_json::json!({
-                    "value": 10,
-                }))
-                .unwrap(),
-            )
-            .execute(&schema)
-            .await
-            .unwrap();
+        let resp = schema
+            .execute(Request::new(query).variables(Variables::from_value(value!({
+                "value": 10,
+            }))))
+            .await;
         assert_eq!(
             resp.data,
-            serde_json::json!({
+            value!({
                 "test": 10,
             })
         );
@@ -195,19 +186,14 @@ pub async fn test_variable_in_input_object() {
         query TestQuery($value: Int!) {
             test2(input: [{value: $value }, {value: $value }])
         }"#;
-        let resp = QueryBuilder::new(query)
-            .variables(
-                Variables::parse_from_json(serde_json::json!({
-                    "value": 3,
-                }))
-                .unwrap(),
-            )
-            .execute(&schema)
-            .await
-            .unwrap();
+        let resp = schema
+            .execute(Request::new(query).variables(Variables::from_value(value!({
+                "value": 3,
+            }))))
+            .await;
         assert_eq!(
             resp.data,
-            serde_json::json!({
+            value!({
                 "test2": 6,
             })
         );
@@ -219,21 +205,95 @@ pub async fn test_variable_in_input_object() {
         mutation TestMutation($value: Int!) {
             test(input: {value: $value })
         }"#;
-        let resp = QueryBuilder::new(query)
-            .variables(
-                Variables::parse_from_json(serde_json::json!({
-                    "value": 10,
-                }))
-                .unwrap(),
-            )
-            .execute(&schema)
-            .await
-            .unwrap();
+        let resp = schema
+            .execute(Request::new(query).variables(Variables::from_value(value!({
+                "value": 10,
+            }))))
+            .await;
         assert_eq!(
             resp.data,
-            serde_json::json!({
+            value!({
                 "test": 10,
             })
         );
     }
+}
+
+#[async_std::test]
+pub async fn test_variables_enum() {
+    #[derive(Enum, Eq, PartialEq, Copy, Clone)]
+    enum MyEnum {
+        A,
+        B,
+        C,
+    }
+
+    struct QueryRoot;
+
+    #[Object]
+    impl QueryRoot {
+        pub async fn value(&self, value: MyEnum) -> i32 {
+            match value {
+                MyEnum::A => 1,
+                MyEnum::B => 2,
+                MyEnum::C => 3,
+            }
+        }
+    }
+
+    let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
+    let query = Request::new(
+        r#"
+            query QueryWithVariables($value1: MyEnum, $value2: MyEnum, $value3: MyEnum) {
+                a: value(value: $value1)
+                b: value(value: $value2)
+                c: value(value: $value3)
+            }
+        "#,
+    )
+    .variables(Variables::from_value(value!({
+        "value1": "A",
+        "value2": "B",
+        "value3": "C",
+    })));
+
+    assert_eq!(
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
+            "a": 1,
+            "b": 2,
+            "c": 3,
+        })
+    );
+}
+
+#[async_std::test]
+pub async fn test_variables_json() {
+    struct QueryRoot;
+
+    #[Object]
+    impl QueryRoot {
+        pub async fn value(&self, value: Json<HashMap<String, i32>>) -> i32 {
+            *value.get("a-b").unwrap()
+        }
+    }
+
+    let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
+    let query = Request::new(
+        r#"
+            query QueryWithVariables($value: JSON) {
+                value(value: $value)
+            }
+        "#,
+    )
+    .variables(Variables::from_value(value!({
+        "value": { "a-b": 123 },
+    })));
+
+    assert_eq!(
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
+            "value": 123,
+        })
+    );
 }

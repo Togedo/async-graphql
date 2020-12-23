@@ -1,9 +1,11 @@
-use crate::parser::query::{Directive, Field};
+use indexmap::map::IndexMap;
+
+use crate::parser::types::{Directive, Field};
 use crate::registry::MetaInputValue;
 use crate::validation::suggestion::make_suggestion;
 use crate::validation::visitor::{Visitor, VisitorContext};
-use crate::{Positioned, Value};
-use indexmap::map::IndexMap;
+use crate::{Name, Positioned};
+use async_graphql_value::Value;
 
 enum ArgsType<'a> {
     Directive(&'a str),
@@ -41,8 +43,8 @@ impl<'a> Visitor<'a> for KnownArgumentNames<'a> {
         self.current_args = ctx
             .registry
             .directives
-            .get(directive.name.as_str())
-            .map(|d| (&d.args, ArgsType::Directive(&directive.name)));
+            .get(directive.node.name.node.as_str())
+            .map(|d| (&d.args, ArgsType::Directive(&directive.node.name.node)));
     }
 
     fn exit_directive(
@@ -56,35 +58,35 @@ impl<'a> Visitor<'a> for KnownArgumentNames<'a> {
     fn enter_argument(
         &mut self,
         ctx: &mut VisitorContext<'a>,
-        name: &'a Positioned<String>,
+        name: &'a Positioned<Name>,
         _value: &'a Positioned<Value>,
     ) {
         if let Some((args, arg_type)) = &self.current_args {
-            if !args.contains_key(name.as_str()) {
+            if !args.contains_key(name.node.as_str()) {
                 match arg_type {
                     ArgsType::Field {
                         field_name,
                         type_name,
                     } => {
                         ctx.report_error(
-                            vec![name.position()],
+                            vec![name.pos],
                             format!(
                                 "Unknown argument \"{}\" on field \"{}\" of type \"{}\".{}",
                                 name,
                                 field_name,
                                 type_name,
-                                self.get_suggestion(name)
+                                self.get_suggestion(name.node.as_str())
                             ),
                         );
                     }
                     ArgsType::Directive(directive_name) => {
                         ctx.report_error(
-                            vec![name.position()],
+                            vec![name.pos],
                             format!(
                                 "Unknown argument \"{}\" on directive \"{}\".{}",
                                 name,
                                 directive_name,
-                                self.get_suggestion(name)
+                                self.get_suggestion(name.node.as_str())
                             ),
                         );
                     }
@@ -95,11 +97,11 @@ impl<'a> Visitor<'a> for KnownArgumentNames<'a> {
 
     fn enter_field(&mut self, ctx: &mut VisitorContext<'a>, field: &'a Positioned<Field>) {
         if let Some(parent_type) = ctx.parent_type() {
-            if let Some(schema_field) = parent_type.field_by_name(&field.name) {
+            if let Some(schema_field) = parent_type.field_by_name(&field.node.name.node) {
                 self.current_args = Some((
                     &schema_field.args,
                     ArgsType::Field {
-                        field_name: &field.name,
+                        field_name: &field.node.name.node,
                         type_name: ctx.parent_type().unwrap().name(),
                     },
                 ));
@@ -115,7 +117,6 @@ impl<'a> Visitor<'a> for KnownArgumentNames<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory<'a>() -> KnownArgumentNames<'a> {
         KnownArgumentNames::default()
@@ -129,6 +130,7 @@ mod tests {
           fragment argOnRequiredArg on Dog {
             doesKnowCommand(dogCommand: SIT)
           }
+          { __typename }
         "#,
         );
     }
@@ -141,6 +143,7 @@ mod tests {
           fragment multipleArgs on ComplicatedArgs {
             multipleReqs(req1: 1, req2: 2)
           }
+          { __typename }
         "#,
         );
     }
@@ -153,6 +156,7 @@ mod tests {
           fragment argOnUnknownField on Dog {
             unknownField(unknownArg: SIT)
           }
+          { __typename }
         "#,
         );
     }
@@ -165,6 +169,7 @@ mod tests {
           fragment multipleArgsReverseOrder on ComplicatedArgs {
             multipleReqs(req2: 2, req1: 1)
           }
+          { __typename }
         "#,
         );
     }
@@ -177,6 +182,7 @@ mod tests {
           fragment noArgOnOptionalArg on Dog {
             isHousetrained
           }
+          { __typename }
         "#,
         );
     }
@@ -234,6 +240,7 @@ mod tests {
           fragment invalidArgName on Dog {
             doesKnowCommand(unknown: true)
           }
+          { __typename }
         "#,
         );
     }
@@ -246,6 +253,7 @@ mod tests {
           fragment oneGoodArgOneInvalidArg on Dog {
             doesKnowCommand(whoknows: 1, dogCommand: SIT, unknown: true)
           }
+          { __typename }
         "#,
         );
     }

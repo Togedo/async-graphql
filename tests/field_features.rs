@@ -1,40 +1,35 @@
 #![allow(dead_code)]
 
 use async_graphql::*;
-use futures::{Stream, StreamExt};
-use std::pin::Pin;
+use futures_util::stream::{Stream, StreamExt};
 
 #[async_std::test]
 pub async fn test_field_features() {
-    #[SimpleObject]
+    #[derive(SimpleObject)]
     struct MyObj {
         value: i32,
-
-        #[field(feature = "bson")]
+        #[cfg(feature = "bson")]
         value_bson: i32,
-
-        #[field(feature = "abc")]
+        #[cfg(feature = "abc")]
         value_abc: i32,
     }
 
-    struct Subscription;
+    struct SubscriptionRoot;
 
     #[Subscription]
-    impl Subscription {
+    impl SubscriptionRoot {
         async fn values(&self) -> impl Stream<Item = i32> {
-            futures::stream::once(async move { 10 })
+            futures_util::stream::once(async move { 10 })
         }
 
-        #[field(feature = "bson")]
+        #[cfg(feature = "bson")]
         async fn values_bson(&self) -> impl Stream<Item = i32> {
-            futures::stream::once(async move { 10 })
+            futures_util::stream::once(async move { 10 })
         }
 
-        #[field(feature = "abc")]
-        async fn values_abc(
-            &self,
-        ) -> Pin<Box<dyn async_graphql::futures::Stream<Item = i32> + Send + 'static>> {
-            Box::pin(futures::stream::once(async move { 10 }))
+        #[cfg(feature = "abc")]
+        async fn values_abc(&self) -> Pin<Box<dyn Stream<Item = i32> + Send + 'static>> {
+            Box::pin(futures_util::stream::once(async move { 10 }))
         }
     }
 
@@ -46,12 +41,12 @@ pub async fn test_field_features() {
             10
         }
 
-        #[field(feature = "bson")]
+        #[cfg(feature = "bson")]
         async fn value_bson(&self) -> i32 {
             10
         }
 
-        #[field(feature = "abc")]
+        #[cfg(feature = "abc")]
         async fn value_abc(&self) -> i32 {
             10
         }
@@ -59,128 +54,107 @@ pub async fn test_field_features() {
         async fn obj(&self) -> MyObj {
             MyObj {
                 value: 10,
+                #[cfg(feature = "bson")]
                 value_bson: 10,
+                #[cfg(feature = "abc")]
                 value_abc: 10,
             }
         }
     }
 
-    let schema = Schema::new(QueryRoot, EmptyMutation, Subscription);
+    let schema = Schema::new(QueryRoot, EmptyMutation, SubscriptionRoot);
     let query = "{ value }";
     assert_eq!(
-        schema.execute(query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "value": 10,
         })
     );
 
     let query = "{ valueBson }";
     assert_eq!(
-        schema.execute(query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "valueBson": 10,
         })
     );
 
     let query = "{ valueAbc }";
     assert_eq!(
-        schema.execute(query).await.unwrap_err(),
-        Error::Query {
-            pos: Pos { column: 3, line: 1 },
-            path: Some(serde_json::json!(["valueAbc"])),
-            err: QueryError::FieldError {
-                err: "`valueAbc` is only available if the features `abc` are enabled".to_string(),
-                extended_error: None
-            }
-        }
+        schema.execute(query).await.into_result().unwrap_err(),
+        vec![ServerError {
+            message: r#"Unknown field "valueAbc" on type "QueryRoot". Did you mean "value"?"#
+                .to_owned(),
+            locations: vec![Pos { column: 3, line: 1 }],
+            path: Vec::new(),
+            extensions: None,
+        }]
     );
 
     let query = "{ obj { value } }";
     assert_eq!(
-        schema.execute(query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "obj": { "value": 10 }
         })
     );
 
     let query = "{ obj { valueBson } }";
     assert_eq!(
-        schema.execute(query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "obj": { "valueBson": 10 }
         })
     );
 
     let query = "{ obj { valueAbc } }";
     assert_eq!(
-        schema.execute(query).await.unwrap_err(),
-        Error::Query {
-            pos: Pos { column: 9, line: 1 },
-            path: Some(serde_json::json!(["obj", "valueAbc"])),
-            err: QueryError::FieldError {
-                err: "`valueAbc` is only available if the features `abc` are enabled".to_string(),
-                extended_error: None
-            }
-        }
+        schema.execute(query).await.into_result().unwrap_err(),
+        vec![ServerError {
+            message: r#"Unknown field "valueAbc" on type "MyObj". Did you mean "value"?"#
+                .to_owned(),
+            locations: vec![Pos { column: 9, line: 1 }],
+            path: Vec::new(),
+            extensions: None,
+        }]
     );
 
-    let mut stream = schema
-        .create_subscription_stream(
-            "subscription { values }",
-            None,
-            Default::default(),
-            Default::default(),
-        )
-        .await
-        .unwrap();
+    let mut stream = schema.execute_stream("subscription { values }").boxed();
     assert_eq!(
-        stream.next().await,
-        Some(Ok(serde_json::json!({
+        stream
+            .next()
+            .await
+            .map(|resp| resp.into_result().unwrap().data)
+            .unwrap(),
+        value!({
             "values": 10
-        })))
+        })
     );
 
-    let mut stream = schema
-        .create_subscription_stream(
-            "subscription { valuesBson }",
-            None,
-            Default::default(),
-            Default::default(),
-        )
-        .await
-        .unwrap();
+    let mut stream = schema.execute_stream("subscription { valuesBson }").boxed();
     assert_eq!(
-        stream.next().await,
-        Some(Ok(serde_json::json!({
+        stream.next().await.map(|resp| resp.data).unwrap(),
+        value!({
             "valuesBson": 10
-        })))
+        })
     );
 
-    let res = schema
-        .create_subscription_stream(
-            "subscription { valuesAbc }",
-            None,
-            Default::default(),
-            Default::default(),
-        )
-        .await;
-    if let Err(err) = res {
-        assert_eq!(
-            err,
-            Error::Query {
-                pos: Pos {
-                    column: 16,
-                    line: 1
-                },
-                path: Some(serde_json::json!(["valuesAbc"])),
-                err: QueryError::FieldError {
-                    err: "`valuesAbc` is only available if the features `abc` are enabled"
-                        .to_string(),
-                    extended_error: None
-                }
-            }
-        )
-    } else {
-        unreachable!()
-    }
+    assert_eq!(
+        schema
+            .execute_stream("subscription { valuesAbc }")
+            .boxed()
+            .next()
+            .await
+            .unwrap()
+            .errors,
+        vec![ServerError {
+            message: r#"Unknown field "valuesAbc" on type "SubscriptionRoot". Did you mean "values", "valuesBson"?"#.to_owned(),
+            locations: vec![Pos {
+                column: 16,
+                line: 1
+            }],
+            path: Vec::new(),
+            extensions: None,
+        }]
+    );
 }

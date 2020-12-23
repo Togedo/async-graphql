@@ -21,11 +21,10 @@ pub async fn test_directive_skip() {
             }
         "#,
         )
-        .await
-        .unwrap();
+        .await;
     assert_eq!(
         resp.data,
-        serde_json::json!({
+        value!({
             "value2": 10,
         })
     );
@@ -52,12 +51,67 @@ pub async fn test_directive_include() {
             }
         "#,
         )
-        .await
-        .unwrap();
+        .await;
     assert_eq!(
         resp.data,
-        serde_json::json!({
+        value!({
             "value1": 10,
+        })
+    );
+}
+
+#[async_std::test]
+pub async fn test_directive_ifdef() {
+    struct QueryRoot;
+
+    #[Object]
+    impl QueryRoot {
+        pub async fn value1(&self) -> i32 {
+            10
+        }
+    }
+
+    struct MutationRoot;
+
+    #[Object]
+    impl MutationRoot {
+        pub async fn action1(&self) -> i32 {
+            10
+        }
+    }
+
+    let schema = Schema::new(QueryRoot, MutationRoot, EmptySubscription);
+    let resp = schema
+        .execute(
+            r#"
+            {
+                value1 @ifdef
+                value2 @ifdef
+            }
+        "#,
+        )
+        .await;
+    assert_eq!(
+        resp.data,
+        value!({
+            "value1": 10,
+        })
+    );
+
+    let resp = schema
+        .execute(
+            r#"
+            mutation {
+                action1 @ifdef
+                action2 @ifdef
+            }
+        "#,
+        )
+        .await;
+    assert_eq!(
+        resp.data,
+        value!({
+            "action1": 10,
         })
     );
 }

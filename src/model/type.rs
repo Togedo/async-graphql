@@ -1,7 +1,5 @@
 use crate::model::{__EnumValue, __Field, __InputValue, __TypeKind};
-use crate::registry;
-use async_graphql_derive::Object;
-use itertools::Itertools;
+use crate::{registry, Context, Object};
 
 enum TypeDetail<'a> {
     Named(&'a registry::MetaType),
@@ -43,7 +41,7 @@ impl<'a> __Type<'a> {
 /// The fundamental unit of any GraphQL Schema is the type. There are many kinds of types in GraphQL as represented by the `__TypeKind` enum.
 ///
 /// Depending on the kind of a type, certain fields describe information about that type. Scalar types provide no information beyond a name and description, while Enum types provide their values. Object and Interface types provide the fields they describe. Abstract types, Union and Interface, provide the Object types possible at runtime. List and NonNull types compose other types.
-#[Object(internal)]
+#[Object(internal, name = "__Type")]
 impl<'a> __Type<'a> {
     async fn kind(&self) -> __TypeKind {
         match &self.detail {
@@ -72,18 +70,22 @@ impl<'a> __Type<'a> {
         match &self.detail {
             TypeDetail::Named(ty) => match ty {
                 registry::MetaType::Scalar { description, .. } => {
-                    description.map(|s| s.to_string())
+                    description.map(ToString::to_string)
                 }
                 registry::MetaType::Object { description, .. } => {
-                    description.map(|s| s.to_string())
+                    description.map(ToString::to_string)
                 }
                 registry::MetaType::Interface { description, .. } => {
-                    description.map(|s| s.to_string())
+                    description.map(ToString::to_string)
                 }
-                registry::MetaType::Union { description, .. } => description.map(|s| s.to_string()),
-                registry::MetaType::Enum { description, .. } => description.map(|s| s.to_string()),
+                registry::MetaType::Union { description, .. } => {
+                    description.map(ToString::to_string)
+                }
+                registry::MetaType::Enum { description, .. } => {
+                    description.map(ToString::to_string)
+                }
                 registry::MetaType::InputObject { description, .. } => {
-                    description.map(|s| s.to_string())
+                    description.map(ToString::to_string)
                 }
             },
             TypeDetail::NonNull(_) => None,
@@ -93,12 +95,17 @@ impl<'a> __Type<'a> {
 
     async fn fields(
         &self,
-        #[arg(default = false)] include_deprecated: bool,
+        ctx: &Context<'_>,
+        #[graphql(default = false)] include_deprecated: bool,
     ) -> Option<Vec<__Field<'a>>> {
         if let TypeDetail::Named(ty) = &self.detail {
             ty.fields().map(|fields| {
                 fields
                     .values()
+                    .filter(|field| match &field.visible {
+                        Some(f) => f(ctx),
+                        None => true,
+                    })
                     .filter(|field| {
                         (include_deprecated || field.deprecation.is_none())
                             && !field.name.starts_with("__")
@@ -107,7 +114,7 @@ impl<'a> __Type<'a> {
                         registry: self.registry,
                         field,
                     })
-                    .collect_vec()
+                    .collect()
             })
         } else {
             None
@@ -156,13 +163,18 @@ impl<'a> __Type<'a> {
 
     async fn enum_values(
         &self,
-        #[arg(default = false)] include_deprecated: bool,
+        ctx: &Context<'_>,
+        #[graphql(default = false)] include_deprecated: bool,
     ) -> Option<Vec<__EnumValue<'a>>> {
         if let TypeDetail::Named(registry::MetaType::Enum { enum_values, .. }) = &self.detail {
             Some(
                 enum_values
                     .values()
-                    .filter(|field| include_deprecated || field.deprecation.is_none())
+                    .filter(|value| match &value.visible {
+                        Some(f) => f(ctx),
+                        None => true,
+                    })
+                    .filter(|value| include_deprecated || value.deprecation.is_none())
                     .map(|value| __EnumValue {
                         registry: self.registry,
                         value,
@@ -174,13 +186,17 @@ impl<'a> __Type<'a> {
         }
     }
 
-    async fn input_fields(&self) -> Option<Vec<__InputValue<'a>>> {
+    async fn input_fields(&self, ctx: &Context<'_>) -> Option<Vec<__InputValue<'a>>> {
         if let TypeDetail::Named(registry::MetaType::InputObject { input_fields, .. }) =
             &self.detail
         {
             Some(
                 input_fields
                     .values()
+                    .filter(|input_value| match &input_value.visible {
+                        Some(f) => f(ctx),
+                        None => true,
+                    })
                     .map(|input_value| __InputValue {
                         registry: self.registry,
                         input_value,

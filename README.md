@@ -20,6 +20,10 @@
     <img src="https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square"
       alt="docs.rs docs" />
   </a>
+  <a href="https://github.com/rust-secure-code/safety-dance/">
+    <img src="https://img.shields.io/badge/unsafe-forbidden-success.svg?style=flat-square"
+      alt="Unsafe Rust forbidden" />
+  </a>
 </div>
 
 `Async-graphql` is a high-performance server-side library that supports all GraphQL specifications.
@@ -30,21 +34,11 @@
 * [Docs](https://docs.rs/async-graphql)
 * [GitHub repository](https://github.com/async-graphql/async-graphql)
 * [Cargo package](https://crates.io/crates/async-graphql)
-* Minimum supported Rust version: 1.42 or later
+* Minimum supported Rust version: 1.46 or later
 
 ## Safety
 
 This crate uses `#![forbid(unsafe_code)]` to ensure everything is implemented in 100% Safe Rust.
-
-## Stability: Unstable & Experimental
-
-__This project doesn't currently follow [Semantic Versioning (SemVer)](https://semver.org/), and there can be breaking changes on any version numbers. We will begin following SemVer once the project reaches `v2.0.0`__
-
-Even though this project is above `v1.0.0`, we are rapidly changing and improving the API. This has caused versioning problems that aren't easily resolved because the project became popular very quickly (it was only started in March 2020).
-
-We currently plan to start following SemVer once we reach the `v2.0.0` release, which will happen once the API starts to stabilize. Unfortunately, we don't currently have the timeline for this.
-
-In accordance with Rust's policy on pre-`1.0.0` crates, we will try to keep breaking changes limited to minor version changes, but if things don't seem to be compiling after an upgrade, it is likely you'll need to dive into compiler errors to update some syntax that changed. Feel free to open an [issue](https://github.com/async-graphql/async-graphql/issues) if something seems weird!
 
 ## Features
 
@@ -53,7 +47,7 @@ In accordance with Rust's policy on pre-`1.0.0` crates, we will try to keep brea
 * Rustfmt friendly (Procedural Macro)
 * Custom scalars
 * Minimal overhead
-* Easy integration (hyper, actix_web, tide ...)
+* Easy integration (actix_web, tide, warp, rocket ...)
 * Upload files (Multipart request)
 * Subscriptions (WebSocket transport)
 * Custom extensions
@@ -61,12 +55,19 @@ In accordance with Rust's policy on pre-`1.0.0` crates, we will try to keep brea
 * Limit query complexity/depth
 * Error Extensions
 * Apollo Federation
+* Batch Queries
+* Apollo Persisted Queries
 
 ## Examples
 
-If you are just getting started, we recommend checking out our examples at: https://github.com/async-graphql/examples
+All examples are in the [sub-repository](https://github.com/async-graphql/examples), located in the examples directory.
 
-To see how you would create a Relay-compliant server using async-graphql, warp, diesel & postgresql, you can also check out a real-world example at: https://github.com/phated/twentyfive-stars
+**Run an example:**
+
+```shell
+git submodule update # update the examples repo
+cd examples && cargo run --bin [name]
+```
 
 ## Benchmark
 
@@ -84,7 +85,7 @@ cargo bench -- "chat run"
 #measure all with jemalloc
 cargo bench --features jemalloc
 
-#measure only simple run with jemalloc 
+#measure only simple run with jemalloc
 cargo bench --features jemalloc -- "simple run"
 ```
 
@@ -97,6 +98,7 @@ Read more here: https://bheisler.github.io/criterion.rs/book/criterion_rs.html
 * Actix-web [async-graphql-actix-web](https://crates.io/crates/async-graphql-actix-web)
 * Warp [async-graphql-warp](https://crates.io/crates/async-graphql-warp)
 * Tide [async-graphql-tide](https://crates.io/crates/async-graphql-tide)
+* Rocket [async-graphql-rocket](https://github.com/async-graphql/async-graphql/tree/master/integrations/rocket)
 
 ## License
 

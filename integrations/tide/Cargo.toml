@@ -1,0 +1,23 @@
+[package]
+name = "async-graphql-tide"
+version = "2.4.3"
+authors = ["vkill <vkill.net@gmail.com>"]
+edition = "2018"
+description = "async-graphql for tide"
+license = "MIT/Apache-2.0"
+documentation = "https://docs.rs/async-graphql-tide/"
+homepage = "https://github.com/async-graphql/async-graphql"
+repository = "https://github.com/async-graphql/async-graphql"
+keywords = ["futures", "async", "graphql"]
+categories = ["network-programming", "asynchronous"]
+
+[dependencies]
+async-graphql = { path = "../..", version = "=2.4.3" }
+
+tide = { version = "0.15.0", default-features = false, features = ["h1-server"] }
+
+[dev-dependencies]
+# Surf lacks multipart support
+reqwest = { version = "0.10.8", default-features = false, features = ["json"] }
+async-std = { version = "1.6.5", features = ["attributes", "tokio02"] }
+serde_json = "1.0.59"
