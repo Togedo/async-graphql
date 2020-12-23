@@ -1,12 +1,14 @@
-use crate::context::QueryEnv;
-use crate::{registry, Context, Error, Pos, QueryError, Result, SchemaEnv, SubscriptionType, Type};
-use futures::Stream;
 use std::borrow::Cow;
 use std::pin::Pin;
+
+use futures_util::stream::{self, Stream};
+
+use crate::{registry, Context, ServerError, ServerResult, SubscriptionType, Type, Value};
 
 /// Empty subscription
 ///
 /// Only the parameters used to construct the Schema, representing an unconfigured subscription.
+#[derive(Default, Copy, Clone)]
 pub struct EmptySubscription;
 
 impl Type for EmptySubscription {
@@ -22,30 +24,25 @@ impl Type for EmptySubscription {
             cache_control: Default::default(),
             extends: false,
             keys: None,
+            visible: None,
         })
     }
 }
 
-#[async_trait::async_trait]
 impl SubscriptionType for EmptySubscription {
     fn is_empty() -> bool {
         true
     }
 
-    async fn create_field_stream(
-        &self,
-        _idx: usize,
-        _ctx: &Context<'_>,
-        _schema_env: SchemaEnv,
-        _query_env: QueryEnv,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<serde_json::Value>> + Send>>>
+    fn create_field_stream<'a>(
+        &'a self,
+        ctx: &'a Context<'a>,
+    ) -> Option<Pin<Box<dyn Stream<Item = ServerResult<Value>> + Send + 'a>>>
     where
         Self: Send + Sync + 'static + Sized,
     {
-        Err(Error::Query {
-            pos: Pos::default(),
-            path: None,
-            err: QueryError::NotConfiguredSubscriptions,
-        })
+        Some(Box::pin(stream::once(async move {
+            Err(ServerError::new("Schema is not configured for mutations.").at(ctx.item.pos))
+        })))
     }
 }

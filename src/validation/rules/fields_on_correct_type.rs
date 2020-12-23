@@ -1,4 +1,4 @@
-use crate::parser::query::Field;
+use crate::parser::types::Field;
 use crate::validation::suggestion::make_suggestion;
 use crate::validation::visitor::{Visitor, VisitorContext};
 use crate::{registry, Positioned};
@@ -12,21 +12,26 @@ impl<'a> Visitor<'a> for FieldsOnCorrectType {
             if let Some(registry::MetaType::Union { .. })
             | Some(registry::MetaType::Interface { .. }) = ctx.parent_type()
             {
-                if field.name.node == "__typename" {
+                if field.node.name.node == "__typename" {
                     return;
                 }
             }
 
             if parent_type
                 .fields()
-                .and_then(|fields| fields.get(field.name.as_str()))
+                .and_then(|fields| fields.get(field.node.name.node.as_str()))
                 .is_none()
+                && !field
+                    .node
+                    .directives
+                    .iter()
+                    .any(|directive| directive.node.name.node == "ifdef")
             {
                 ctx.report_error(
-                    vec![field.position()],
+                    vec![field.pos],
                     format!(
                         "Unknown field \"{}\" on type \"{}\".{}",
-                        field.name,
+                        field.node.name,
                         parent_type.name(),
                         make_suggestion(
                             " Did you mean",
@@ -35,8 +40,8 @@ impl<'a> Visitor<'a> for FieldsOnCorrectType {
                                 .iter()
                                 .map(|fields| fields.keys())
                                 .flatten()
-                                .map(|s| s.as_str()),
-                            &field.name
+                                .map(String::as_str),
+                            &field.node.name.node,
                         )
                         .unwrap_or_default()
                     ),
@@ -49,9 +54,8 @@ impl<'a> Visitor<'a> for FieldsOnCorrectType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{expect_fails_rule, expect_passes_rule};
 
-    pub fn factory<'a>() -> FieldsOnCorrectType {
+    pub fn factory() -> FieldsOnCorrectType {
         FieldsOnCorrectType
     }
 
@@ -64,6 +68,7 @@ mod tests {
             __typename
             name
           }
+          { __typename }
         "#,
         );
     }
@@ -77,6 +82,7 @@ mod tests {
             tn : __typename
             otherName : name
           }
+          { __typename }
         "#,
         );
     }
@@ -90,6 +96,7 @@ mod tests {
             __typename
             name
           }
+          { __typename }
         "#,
         );
     }
@@ -102,6 +109,7 @@ mod tests {
           fragment interfaceFieldSelection on Pet {
             otherName : name
           }
+          { __typename }
         "#,
         );
     }
@@ -114,6 +122,7 @@ mod tests {
           fragment lyingAliasSelection on Dog {
             name : nickname
           }
+          { __typename }
         "#,
         );
     }
@@ -126,6 +135,7 @@ mod tests {
           fragment unknownSelection on UnknownType {
             unknownField
           }
+          { __typename }
         "#,
         );
     }
@@ -142,6 +152,7 @@ mod tests {
               }
             }
           }
+          { __typename }
         "#,
         );
     }
@@ -154,6 +165,7 @@ mod tests {
           fragment fieldNotDefined on Dog {
             meowVolume
           }
+          { __typename }
         "#,
         );
     }
@@ -168,6 +180,7 @@ mod tests {
               deeper_unknown_field
             }
           }
+          { __typename }
         "#,
         );
     }
@@ -182,6 +195,7 @@ mod tests {
               unknown_field
             }
           }
+          { __typename }
         "#,
         );
     }
@@ -196,6 +210,7 @@ mod tests {
               meowVolume
             }
           }
+          { __typename }
         "#,
         );
     }
@@ -208,6 +223,7 @@ mod tests {
           fragment aliasedFieldTargetNotDefined on Dog {
             volume : mooVolume
           }
+          { __typename }
         "#,
         );
     }
@@ -220,6 +236,7 @@ mod tests {
           fragment aliasedLyingFieldTargetNotDefined on Dog {
             barkVolume : kawVolume
           }
+          { __typename }
         "#,
         );
     }
@@ -232,6 +249,7 @@ mod tests {
           fragment notDefinedOnInterface on Pet {
             tailLength
           }
+          { __typename }
         "#,
         );
     }
@@ -244,6 +262,7 @@ mod tests {
           fragment definedOnImplementorsButNotInterface on Pet {
             nickname
           }
+          { __typename }
         "#,
         );
     }
@@ -256,6 +275,7 @@ mod tests {
           fragment definedOnImplementorsButNotInterface on Pet {
             __typename
           }
+          { __typename }
         "#,
         );
     }
@@ -268,6 +288,7 @@ mod tests {
           fragment definedOnImplementorsQueriedOnUnion on CatOrDog {
             name
           }
+          { __typename }
         "#,
         );
     }
@@ -286,6 +307,7 @@ mod tests {
               name
             }
           }
+          { __typename }
         "#,
         );
     }
@@ -303,6 +325,7 @@ mod tests {
               name
             }
           }
+          { __typename }
         "#,
         );
     }

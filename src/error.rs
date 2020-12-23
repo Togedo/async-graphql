@@ -1,118 +1,301 @@
-use crate::{Pos, QueryPathNode, Value};
-use std::fmt::{Debug, Display};
+use std::collections::BTreeMap;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::marker::PhantomData;
 
-/// Input Value Error
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::{parser, InputType, Pos, Value};
+
+/// Extensions to the error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct ErrorExtensionValues(BTreeMap<String, Value>);
+
+impl ErrorExtensionValues {
+    /// Set an extension value.
+    pub fn set(&mut self, name: impl AsRef<str>, value: impl Into<Value>) {
+        self.0.insert(name.as_ref().to_string(), value.into());
+    }
+}
+
+/// An error in a GraphQL server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerError {
+    /// An explanatory message of the error.
+    pub message: String,
+    /// Where the error occurred.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub locations: Vec<Pos>,
+    /// If the error occurred in a resolver, the path to the error.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub path: Vec<PathSegment>,
+    /// Extensions to the error.
+    #[serde(skip_serializing_if = "error_extensions_is_empty", default)]
+    pub extensions: Option<ErrorExtensionValues>,
+}
+
+fn error_extensions_is_empty(values: &Option<ErrorExtensionValues>) -> bool {
+    values.as_ref().map_or(true, |values| values.0.is_empty())
+}
+
+impl ServerError {
+    /// Create a new server error with the message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            locations: Vec::new(),
+            path: Vec::new(),
+            extensions: None,
+        }
+    }
+
+    /// Add a position to the error.
+    pub fn at(mut self, at: Pos) -> Self {
+        self.locations.push(at);
+        self
+    }
+
+    /// Prepend a path to the error.
+    pub fn path(mut self, path: PathSegment) -> Self {
+        self.path.insert(0, path);
+        self
+    }
+}
+
+impl Display for ServerError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl From<ServerError> for Vec<ServerError> {
+    fn from(single: ServerError) -> Self {
+        vec![single]
+    }
+}
+
+impl From<Error> for ServerError {
+    fn from(e: Error) -> Self {
+        e.into_server_error()
+    }
+}
+
+impl From<parser::Error> for ServerError {
+    fn from(e: parser::Error) -> Self {
+        Self {
+            message: e.to_string(),
+            locations: e.positions().collect(),
+            path: Vec::new(),
+            extensions: None,
+        }
+    }
+}
+
+/// A segment of path to a resolver.
+///
+/// This is like [`QueryPathSegment`](enum.QueryPathSegment.html), but owned and used as a part of
+/// errors instead of during execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PathSegment {
+    /// A field in an object.
+    Field(String),
+    /// An index in a list.
+    Index(usize),
+}
+
+/// Alias for `Result<T, ServerError>`.
+pub type ServerResult<T> = std::result::Result<T, ServerError>;
+
+/// An error parsing an input value.
+///
+/// This type is generic over T as it uses T's type name when converting to a regular error.
 #[derive(Debug)]
-pub enum InputValueError {
-    /// Custom input value parsing error.
-    Custom(String),
-
-    /// The type of input value does not match the expectation.
-    ExpectedType(Value),
+pub struct InputValueError<T> {
+    message: String,
+    phantom: PhantomData<T>,
 }
 
-impl<T: Display> From<T> for InputValueError {
-    fn from(err: T) -> Self {
-        InputValueError::Custom(err.to_string())
+impl<T: InputType> InputValueError<T> {
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            phantom: PhantomData,
+        }
+    }
+
+    /// The expected input type did not match the actual input type.
+    #[must_use]
+    pub fn expected_type(actual: Value) -> Self {
+        Self::new(format!(
+            r#"Expected input type "{}", found {}."#,
+            T::type_name(),
+            actual
+        ))
+    }
+
+    /// A custom error message.
+    ///
+    /// Any type that implements `Display` is automatically converted to this if you use the `?`
+    /// operator.
+    #[must_use]
+    pub fn custom(msg: impl Display) -> Self {
+        Self::new(format!(r#"Failed to parse "{}": {}"#, T::type_name(), msg))
+    }
+
+    /// Propagate the error message to a different type.
+    pub fn propagate<U: InputType>(self) -> InputValueError<U> {
+        if T::type_name() != U::type_name() {
+            InputValueError::new(format!(
+                r#"{} (occurred while parsing "{}")"#,
+                self.message,
+                U::type_name()
+            ))
+        } else {
+            InputValueError::new(self.message)
+        }
+    }
+
+    /// Convert the error into a server error.
+    pub fn into_server_error(self) -> ServerError {
+        ServerError::new(self.message)
     }
 }
 
-impl InputValueError {
-    #[allow(missing_docs)]
-    pub fn into_error(self, pos: Pos, expected_type: String) -> Error {
-        match self {
-            InputValueError::Custom(reason) => Error::Query {
-                pos,
-                path: None,
-                err: QueryError::ParseInputValue { reason },
-            },
-            InputValueError::ExpectedType(value) => Error::Query {
-                pos,
-                path: None,
-                err: QueryError::ExpectedInputType {
-                    expect: expected_type,
-                    actual: value,
-                },
-            },
+impl<T: InputType, E: Display> From<E> for InputValueError<T> {
+    fn from(error: E) -> Self {
+        Self::custom(error)
+    }
+}
+
+/// An error parsing a value of type `T`.
+pub type InputValueResult<T> = Result<T, InputValueError<T>>;
+
+/// An error with a message and optional extensions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Error {
+    /// The error message.
+    pub message: String,
+    /// Extensions to the error.
+    #[serde(skip_serializing_if = "error_extensions_is_empty")]
+    pub extensions: Option<ErrorExtensionValues>,
+}
+
+impl Error {
+    /// Create an error from the given error message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            extensions: None,
+        }
+    }
+
+    /// Convert the error to a server error.
+    #[must_use]
+    pub fn into_server_error(self) -> ServerError {
+        ServerError {
+            message: self.message,
+            locations: Vec::new(),
+            path: Vec::new(),
+            extensions: self.extensions,
         }
     }
 }
 
-/// InputValueResult type
-pub type InputValueResult<T> = std::result::Result<T, InputValueError>;
-
-/// FieldError type
-#[derive(Clone, Debug)]
-pub struct FieldError(pub String, pub Option<serde_json::Value>);
-
-impl FieldError {
-    #[doc(hidden)]
-    pub fn into_error(self, pos: Pos) -> Error {
-        Error::Query {
-            pos,
-            path: None,
-            err: QueryError::FieldError {
-                err: self.0,
-                extended_error: self.1,
-            },
-        }
-    }
-
-    #[doc(hidden)]
-    pub fn into_error_with_path(self, pos: Pos, path: Option<&QueryPathNode<'_>>) -> Error {
-        Error::Query {
-            pos,
-            path: path.and_then(|path| serde_json::to_value(path).ok()),
-            err: QueryError::FieldError {
-                err: self.0,
-                extended_error: self.1,
-            },
+impl<T: Display> From<T> for Error {
+    fn from(e: T) -> Self {
+        Self {
+            message: e.to_string(),
+            extensions: None,
         }
     }
 }
 
-/// FieldResult type
-pub type FieldResult<T> = std::result::Result<T, FieldError>;
+/// An alias for `Result<T, Error>`.
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-impl<E> From<E> for FieldError
-where
-    E: std::fmt::Display + Send + Sync + 'static,
-{
-    fn from(err: E) -> Self {
-        FieldError(format!("{}", err), None)
-    }
+/// An error parsing the request.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ParseRequestError {
+    /// An IO error occurred.
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+
+    /// The request's syntax was invalid.
+    #[error("Invalid request: {0}")]
+    InvalidRequest(serde_json::Error),
+
+    /// The request's files map was invalid.
+    #[error("Invalid files map: {0}")]
+    InvalidFilesMap(serde_json::Error),
+
+    /// The request's multipart data was invalid.
+    #[error("Invalid multipart data")]
+    #[cfg(feature = "multipart")]
+    #[cfg_attr(feature = "nightly", doc(cfg(feature = "multipart")))]
+    InvalidMultipart(multer::Error),
+
+    /// Missing "operators" part for multipart request.
+    #[error("Missing \"operators\" part")]
+    MissingOperatorsPart,
+
+    /// Missing "map" part for multipart request.
+    #[error("Missing \"map\" part")]
+    MissingMapPart,
+
+    /// It's not an upload operation
+    #[error("It's not an upload operation")]
+    NotUpload,
+
+    /// Files were missing the request.
+    #[error("Missing files")]
+    MissingFiles,
+
+    /// The request's payload is too large, and this server rejected it.
+    #[error("Payload too large")]
+    PayloadTooLarge,
+
+    /// The request is a batch request, but the server does not support batch requests.
+    #[error("Batch requests are not supported")]
+    UnsupportedBatch,
 }
 
-#[allow(missing_docs)]
-pub trait ErrorExtensions
-where
-    Self: Sized,
-{
-    fn extend(&self) -> FieldError;
-    fn extend_with<C>(self, cb: C) -> FieldError
-    where
-        C: FnOnce(&Self) -> serde_json::Value,
-    {
-        let name = self.extend().0;
-
-        if let Some(mut base) = self.extend().1 {
-            let mut cb_res = cb(&self);
-            if let Some(base_map) = base.as_object_mut() {
-                if let Some(cb_res_map) = cb_res.as_object_mut() {
-                    base_map.append(cb_res_map);
-                }
-                return FieldError(name, Some(serde_json::json!(base_map)));
-            } else {
-                return FieldError(name, Some(cb_res));
+#[cfg(feature = "multipart")]
+impl From<multer::Error> for ParseRequestError {
+    fn from(err: multer::Error) -> Self {
+        match err {
+            multer::Error::FieldSizeExceeded { .. } | multer::Error::StreamSizeExceeded { .. } => {
+                ParseRequestError::PayloadTooLarge
             }
+            _ => ParseRequestError::InvalidMultipart(err),
         }
-
-        FieldError(name, Some(cb(&self)))
     }
 }
 
-impl ErrorExtensions for FieldError {
-    fn extend(&self) -> FieldError {
+/// An error which can be extended into a `Error`.
+pub trait ErrorExtensions: Sized {
+    /// Convert the error to a `Error`.
+    fn extend(&self) -> Error;
+
+    /// Add extensions to the error, using a callback to make the extensions.
+    fn extend_with<C>(self, cb: C) -> Error
+    where
+        C: FnOnce(&Self, &mut ErrorExtensionValues),
+    {
+        let message = self.extend().message;
+        let mut extensions = self.extend().extensions.unwrap_or_default();
+        cb(&self, &mut extensions);
+        Error {
+            message,
+            extensions: Some(extensions),
+        }
+    }
+}
+
+impl ErrorExtensions for Error {
+    fn extend(&self) -> Error {
         self.clone()
     }
 }
@@ -120,21 +303,23 @@ impl ErrorExtensions for FieldError {
 // implementing for &E instead of E gives the user the possibility to implement for E which does
 // not conflict with this implementation acting as a fallback.
 impl<E: std::fmt::Display> ErrorExtensions for &E {
-    fn extend(&self) -> FieldError {
-        FieldError(format!("{}", self), None)
+    fn extend(&self) -> Error {
+        Error {
+            message: self.to_string(),
+            extensions: None,
+        }
     }
 }
 
-#[allow(missing_docs)]
-pub trait ResultExt<T, E>
-where
-    Self: Sized,
-{
-    fn extend_err<CB>(self, cb: CB) -> FieldResult<T>
+/// Extend a `Result`'s error value with [`ErrorExtensions`](trait.ErrorExtensions.html).
+pub trait ResultExt<T, E>: Sized {
+    /// Extend the error value of the result with the callback.
+    fn extend_err<C>(self, cb: C) -> Result<T>
     where
-        CB: FnOnce(&E) -> serde_json::Value;
+        C: FnOnce(&E, &mut ErrorExtensionValues);
 
-    fn extend(self) -> FieldResult<T>;
+    /// Extend the result to a `Result`.
+    fn extend(self) -> Result<T>;
 }
 
 // This is implemented on E and not &E which means it cannot be used on foreign types.
@@ -143,204 +328,20 @@ impl<T, E> ResultExt<T, E> for std::result::Result<T, E>
 where
     E: ErrorExtensions + Send + Sync + 'static,
 {
-    fn extend_err<C>(self, cb: C) -> FieldResult<T>
+    fn extend_err<C>(self, cb: C) -> Result<T>
     where
-        C: FnOnce(&E) -> serde_json::Value,
+        C: FnOnce(&E, &mut ErrorExtensionValues),
     {
         match self {
-            Err(err) => Err(err.extend_with(|e| cb(e))),
+            Err(err) => Err(err.extend_with(|e, ee| cb(e, ee))),
             Ok(value) => Ok(value),
         }
     }
 
-    fn extend(self) -> FieldResult<T> {
+    fn extend(self) -> Result<T> {
         match self {
             Err(err) => Err(err.extend()),
             Ok(value) => Ok(value),
         }
     }
-}
-
-/// Error for query
-#[derive(Debug, Error, PartialEq)]
-#[allow(missing_docs)]
-pub enum QueryError {
-    #[error("Not supported.")]
-    NotSupported,
-
-    #[error("Expected input type \"{expect}\", found {actual}.")]
-    ExpectedInputType {
-        /// Expect input type
-        expect: String,
-
-        /// Actual input type
-        actual: Value,
-    },
-
-    #[error("Failed to parse input value: {reason}")]
-    ParseInputValue { reason: String },
-
-    #[error("Cannot query field \"{field_name}\" on type \"{object}\".")]
-    FieldNotFound {
-        /// Field name
-        field_name: String,
-
-        /// Object name
-        object: String,
-    },
-
-    #[error("Missing operation")]
-    MissingOperation,
-
-    #[error("Unknown operation named \"{name}\"")]
-    UnknownOperationNamed {
-        /// Operation name for query
-        name: String,
-    },
-
-    #[error("Type \"{object}\" must have a selection of subfields.")]
-    MustHaveSubFields {
-        /// Object name
-        object: String,
-    },
-
-    #[error("Schema is not configured for mutations.")]
-    NotConfiguredMutations,
-
-    #[error("Schema is not configured for subscriptions.")]
-    NotConfiguredSubscriptions,
-
-    #[error("Invalid value for enum \"{ty}\".")]
-    InvalidEnumValue {
-        /// Enum type name
-        ty: String,
-
-        /// Enum value
-        value: String,
-    },
-
-    #[error("Required field \"{field_name}\" for InputObject \"{object}\" does not exist.")]
-    RequiredField {
-        /// field name
-        field_name: String,
-
-        /// object name
-        object: &'static str,
-    },
-
-    #[error("Variable \"${var_name}\" is not defined")]
-    VarNotDefined {
-        /// Variable name
-        var_name: String,
-    },
-
-    #[error(
-        "Directive \"{directive}\" argument \"{arg_name}\" of type \"{arg_type}\" is required, but it was not provided."
-    )]
-    RequiredDirectiveArgs {
-        /// Directive name
-        directive: &'static str,
-
-        /// Argument name
-        arg_name: &'static str,
-
-        /// Argument type
-        arg_type: &'static str,
-    },
-
-    #[error("Unknown directive \"{name}\".")]
-    UnknownDirective {
-        /// Directive name
-        name: String,
-    },
-
-    #[error("Unknown fragment \"{name}\".")]
-    UnknownFragment {
-        // Fragment name
-        name: String,
-    },
-
-    #[error("Too complex")]
-    TooComplex,
-
-    #[error("Too deep")]
-    TooDeep,
-
-    #[error("Failed to resolve field: {err}")]
-    FieldError {
-        err: String,
-        extended_error: Option<serde_json::Value>,
-    },
-
-    #[error("Entity not found")]
-    EntityNotFound,
-
-    #[error("\"__typename\" must be an existing string")]
-    TypeNameNotExists,
-}
-
-impl QueryError {
-    #[doc(hidden)]
-    pub fn into_error(self, pos: Pos) -> Error {
-        Error::Query {
-            pos,
-            path: None,
-            err: self,
-        }
-    }
-}
-
-#[allow(missing_docs)]
-#[derive(Debug, Error)]
-pub enum ParseRequestError {
-    #[error("{0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("Invalid request: {0}")]
-    InvalidRequest(serde_json::Error),
-
-    #[error("Invalid files map: {0}")]
-    InvalidFilesMap(serde_json::Error),
-
-    #[error("Invalid multipart data")]
-    InvalidMultipart(multer::Error),
-
-    #[error("Missing \"operators\" part")]
-    MissingOperatorsPart,
-
-    #[error("Missing \"map\" part")]
-    MissingMapPart,
-
-    #[error("It's not an upload operation")]
-    NotUpload,
-
-    #[error("Missing files")]
-    MissingFiles,
-
-    #[error("Payload too large")]
-    PayloadTooLarge,
-}
-
-#[allow(missing_docs)]
-#[derive(Debug, PartialEq)]
-pub struct RuleError {
-    pub locations: Vec<Pos>,
-    pub message: String,
-}
-
-#[allow(missing_docs)]
-#[derive(Debug, Error, PartialEq)]
-pub enum Error {
-    #[error("Parse error: {0}")]
-    Parse(#[from] crate::parser::Error),
-
-    #[error("Query error: {err}")]
-    Query {
-        pos: Pos,
-        path: Option<serde_json::Value>,
-        err: QueryError,
-    },
-
-    #[error("Rule error")]
-    Rule { errors: Vec<RuleError> },
 }

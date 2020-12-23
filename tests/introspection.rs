@@ -1,13 +1,13 @@
 use async_graphql::*;
-use async_std::stream;
-use async_std::stream::Stream;
+use async_std::stream::{self, Stream};
 
 #[derive(Clone, Debug)]
 struct Circle {
     radius: f32,
 }
 
-#[Object(desc = "Circle")]
+/// Circle
+#[Object]
 impl Circle {
     async fn scale(&self, s: f32) -> TestInterface {
         Circle {
@@ -22,9 +22,10 @@ struct Square {
     width: f32,
 }
 
-#[Object(desc = "Square")]
+/// Square
+#[Object]
 impl Square {
-    #[field(deprecation = "Field scale is deprecated")]
+    #[graphql(deprecation = "Field scale is deprecated")]
     async fn scale(&self, s: f32) -> TestInterface {
         Square {
             width: self.width * s,
@@ -33,37 +34,37 @@ impl Square {
     }
 }
 
-#[Interface(field(name = "scale", type = "TestInterface", arg(name = "s", type = "f32")))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Interface)]
+#[graphql(field(name = "scale", type = "TestInterface", arg(name = "s", type = "f32")))]
 enum TestInterface {
     Circle(Circle),
     Square(Square),
 }
 
-#[Union(desc = "Test Union")]
-#[derive(Clone, Debug)]
+/// Test Union
+#[derive(Clone, Debug, Union)]
 enum TestUnion {
     Circle(Circle),
     Square(Square),
 }
 
-#[Enum(desc = "Test Enum")]
+/// Test Enum
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
 enum TestEnum {
-    #[item(desc = "Kind 1")]
+    /// Kind 1
     Kind1,
 
-    #[item(desc = "Kind 2", deprecation = "Kind 2 depracted")]
+    /// Kind 2
+    #[graphql(deprecation = "Kind 2 deprecated")]
     Kind2,
 }
 
-#[SimpleObject]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, SimpleObject)]
 struct SimpleList {
     items: Vec<String>,
 }
 
-#[SimpleObject]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, SimpleObject)]
 struct SimpleOption {
     required: i32,
     optional: Option<i32>,
@@ -73,7 +74,8 @@ struct SimpleOption {
 #[derive(Clone, Debug)]
 struct TestScalar(i32);
 
-#[Scalar(desc = "Test scalar")]
+/// Test scalar
+#[Scalar]
 impl ScalarType for TestScalar {
     fn parse(_value: Value) -> InputValueResult<Self> {
         Ok(TestScalar(42))
@@ -84,29 +86,27 @@ impl ScalarType for TestScalar {
     }
 
     fn to_value(&self) -> Value {
-        Value::Int(self.0.clone())
+        Value::Number(self.0.into())
     }
 }
 
 /// Is SimpleObject
 /// and some more ```lorem ipsum```
-#[SimpleObject]
+#[derive(SimpleObject)]
 struct SimpleObject {
     /// Value a with # 'some' `markdown`"."
     /// and some more lorem ipsum
     a: i32,
 
-    #[field(desc = "Value b description")]
+    /// Value b description
     b: String,
 
-    /// Value c doc comment
-    #[field(desc = "Value c description")]
+    /// Value c description
     c: ID,
 
-    #[field(desc = "")]
     d: SimpleOption,
 
-    #[field(deprecation = "Field e is deprecated")]
+    #[graphql(deprecation = "Field e is deprecated")]
     e: bool,
 
     f: TestEnum,
@@ -122,7 +122,8 @@ struct SimpleObject {
 
 struct Query;
 
-#[Object(desc = "Global query")]
+/// Global query
+#[Object]
 impl Query {
     /// Get a simple object
     async fn simple_object(&self) -> SimpleObject {
@@ -130,14 +131,16 @@ impl Query {
     }
 }
 
-#[async_graphql::InputObject(desc = "Simple Input")]
+/// Simple Input
+#[derive(InputObject)]
 pub struct SimpleInput {
     pub a: String,
 }
 
 struct Mutation;
 
-#[Object(desc = "Global mutation")]
+/// Global mutation
+#[Object]
 impl Mutation {
     /// simple_mutation description
     /// line2
@@ -149,10 +152,14 @@ impl Mutation {
 
 struct Subscription;
 
-#[Subscription(desc = "Global subscription")]
+/// Global subscription
+#[Subscription]
 impl Subscription {
     /// simple_subscription description
-    async fn simple_subscription(&self, #[arg(default = 1)] step: i32) -> impl Stream<Item = i32> {
+    async fn simple_subscription(
+        &self,
+        #[graphql(default = 1)] step: i32,
+    ) -> impl Stream<Item = i32> {
         stream::once(step)
     }
 }
@@ -188,7 +195,7 @@ impl Subscription {
 //    }
 //    "#;
 
-//     let res_json = serde_json::json!({
+//     let res_json = value!({
 //         "__schema": {
 //         }
 //     });
@@ -218,7 +225,7 @@ impl Subscription {
 //    }
 //    "#;
 //
-//     let res_json = serde_json::json!({
+//     let res_json = value!({
 //         "__type": {
 //             "name": "SimpleObject",
 //             "description": "Is SimpleObject",
@@ -269,10 +276,10 @@ impl Subscription {
 // }
 
 #[async_std::test]
-pub async fn test_introspection_depraction() {
+pub async fn test_introspection_deprecation() {
     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
 
-    let get_object_query = |obj, is_depracted| {
+    let get_object_query = |obj, is_deprecated| {
         format!(
             r#"
         {{
@@ -285,14 +292,14 @@ pub async fn test_introspection_depraction() {
             }}
        }}
        "#,
-            obj, is_depracted
+            obj, is_deprecated
         )
     };
 
-    // SimpleObject with depracted inclusive
+    // SimpleObject with deprecated inclusive
     let mut query = get_object_query("SimpleObject", "true");
 
-    let mut res_json = serde_json::json!({
+    let mut res_json = value!({
         "__type": {
             "fields": [
               {
@@ -349,14 +356,14 @@ pub async fn test_introspection_depraction() {
         }
     });
 
-    let mut res = schema.execute(&query).await.unwrap().data;
+    let mut res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
-    // SimpleObject with depracted fields exclusive
+    // SimpleObject with deprecated fields exclusive
     query = get_object_query("SimpleObject", "false");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "fields": [
               {
@@ -408,14 +415,14 @@ pub async fn test_introspection_depraction() {
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
-    // Object with only one depracted field inclusive
+    // Object with only one deprecated field inclusive
     query = get_object_query("Square", "true");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "fields": [
                 {
@@ -427,24 +434,24 @@ pub async fn test_introspection_depraction() {
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
-    // Object with only one depracted field exclusive
+    // Object with only one deprecated field exclusive
     query = get_object_query("Square", "false");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "fields": []
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
-    let get_enum_query = |obj, is_depracted| {
+    let get_enum_query = |obj, is_deprecated| {
         format!(
             r#"
         {{
@@ -457,14 +464,14 @@ pub async fn test_introspection_depraction() {
             }}
        }}
        "#,
-            obj, is_depracted
+            obj, is_deprecated
         )
     };
 
-    // Enum with depracted value inclusive
+    // Enum with deprecated value inclusive
     query = get_enum_query("TestEnum", "true");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "enumValues": [
               {
@@ -475,20 +482,20 @@ pub async fn test_introspection_depraction() {
               {
                 "name": "KIND_2",
                 "isDeprecated": true,
-                "deprecationReason": "Kind 2 depracted"
+                "deprecationReason": "Kind 2 deprecated"
               }
             ]
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
-    // Enum with depracted value exclusive
+    // Enum with deprecated value exclusive
     query = get_enum_query("TestEnum", "false");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "enumValues": [
               {
@@ -500,7 +507,7 @@ pub async fn test_introspection_depraction() {
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 }
@@ -524,70 +531,70 @@ pub async fn test_introspection_type_kind() {
     // Test simple object
     let mut query = get_type_kind_query("SimpleObject");
 
-    let mut res_json = serde_json::json!({
+    let mut res_json = value!({
         "__type": {
             "name": "SimpleObject",
             "kind": "OBJECT"
         }
     });
 
-    let mut res = schema.execute(&query).await.unwrap().data;
+    let mut res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
     // Test object
     query = get_type_kind_query("Square");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "name": "Square",
             "kind": "OBJECT"
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
     // Test enum
     query = get_type_kind_query("TestEnum");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "name": "TestEnum",
             "kind": "ENUM"
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
     // Test union
     query = get_type_kind_query("TestUnion");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "name": "TestUnion",
             "kind": "UNION"
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
     // Test scalar
     query = get_type_kind_query("ID");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "name": "ID",
             "kind": "SCALAR"
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
@@ -608,7 +615,7 @@ pub async fn test_introspection_type_kind() {
     // Test list
     query = get_field_kind_query("SimpleList");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "fields": [
                 {
@@ -626,14 +633,14 @@ pub async fn test_introspection_type_kind() {
           }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
     // Test NON_NULL
     query = get_field_kind_query("SimpleOption");
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "fields": [
               {
@@ -659,7 +666,7 @@ pub async fn test_introspection_type_kind() {
         }
     });
 
-    res = schema.execute(&query).await.unwrap().data;
+    res = schema.execute(&query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 }
@@ -678,7 +685,7 @@ pub async fn test_introspection_scalar() {
    }
    "#;
 
-    let res_json = serde_json::json!({
+    let res_json = value!({
         "__type": {
             "kind": "SCALAR",
             "name": "TestScalar",
@@ -686,7 +693,7 @@ pub async fn test_introspection_scalar() {
         }
     });
 
-    let res = schema.execute(query).await.unwrap().data;
+    let res = schema.execute(query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json)
 }
@@ -706,7 +713,7 @@ pub async fn test_introspection_union() {
    }
    "#;
 
-    let res_json = serde_json::json!({
+    let res_json = value!({
         "__type": {
             "kind": "UNION",
             "name": "TestUnion",
@@ -722,7 +729,7 @@ pub async fn test_introspection_union() {
         }
     });
 
-    let res = schema.execute(query).await.unwrap().data;
+    let res = schema.execute(query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json)
 }
@@ -744,7 +751,7 @@ pub async fn test_introspection_interface() {
    }
    "#;
 
-    let mut res_json = serde_json::json!({
+    let mut res_json = value!({
         "__type": {
             "kind": "INTERFACE",
             "name": "TestInterface",
@@ -765,7 +772,7 @@ pub async fn test_introspection_interface() {
         }
     });
 
-    let mut res = schema.execute(query).await.unwrap().data;
+    let mut res = schema.execute(query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 
@@ -782,7 +789,7 @@ pub async fn test_introspection_interface() {
    }
    "#;
 
-    res_json = serde_json::json!({
+    res_json = value!({
         "__type": {
             "kind": "OBJECT",
             "name": "Circle",
@@ -800,7 +807,7 @@ pub async fn test_introspection_interface() {
         }
     });
 
-    res = schema.execute(query).await.unwrap().data;
+    res = schema.execute(query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json);
 }
@@ -825,7 +832,7 @@ pub async fn test_introspection_enum() {
    }
    "#;
 
-    let res_json = serde_json::json!({
+    let res_json = value!({
         "__type": {
             "kind": "ENUM",
             "name": "TestEnum",
@@ -841,13 +848,13 @@ pub async fn test_introspection_enum() {
                 "name": "KIND_2",
                 "description": "Kind 2",
                 "isDeprecated": true,
-                "deprecationReason": "Kind 2 depracted"
+                "deprecationReason": "Kind 2 deprecated"
               }
             ]
         }
     });
 
-    let res = schema.execute(query).await.unwrap().data;
+    let res = schema.execute(query).await.into_result().unwrap().data;
 
     println!("{}", serde_json::to_string_pretty(&res).unwrap());
 
@@ -869,7 +876,7 @@ pub async fn test_introspection_input_object() {
    }
    "#;
 
-    let res_json = serde_json::json!({
+    let res_json = value!({
         "__type": {
             "kind": "INPUT_OBJECT",
             "name": "SimpleInput",
@@ -882,7 +889,7 @@ pub async fn test_introspection_input_object() {
         }
     });
 
-    let res = schema.execute(query).await.unwrap().data;
+    let res = schema.execute(query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json)
 }
@@ -907,7 +914,7 @@ pub async fn test_introspection_mutation() {
    }
    "#;
 
-    let res_json = serde_json::json!({
+    let res_json = value!({
         "__type": {
             "name": "Mutation",
             "kind": "OBJECT",
@@ -930,7 +937,7 @@ pub async fn test_introspection_mutation() {
         }
     });
 
-    let res = schema.execute(query).await.unwrap().data;
+    let res = schema.execute(query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json)
 }
@@ -955,7 +962,7 @@ pub async fn test_introspection_subscription() {
    }
    "#;
 
-    let res_json = serde_json::json!({
+    let res_json = value!({
         "__type": {
             "name": "Subscription",
             "kind": "OBJECT",
@@ -978,7 +985,7 @@ pub async fn test_introspection_subscription() {
         }
     });
 
-    let res = schema.execute(query).await.unwrap().data;
+    let res = schema.execute(query).await.into_result().unwrap().data;
 
     assert_eq!(res, res_json)
 }
@@ -1010,7 +1017,7 @@ pub async fn test_introspection_subscription() {
 //    }
 //    "#;
 //
-//     let res_json = serde_json::json!({
+//     let res_json = value!({
 //         "__type": {
 //             "kind": "OBJECT",
 //             "name": "SimpleObject",

@@ -1,9 +1,10 @@
 use crate::model::__DirectiveLocation;
-use crate::parser::query::{
+use crate::parser::types::{
     Directive, Field, FragmentDefinition, FragmentSpread, InlineFragment, OperationDefinition,
+    OperationType,
 };
 use crate::validation::visitor::{Visitor, VisitorContext};
-use crate::Positioned;
+use crate::{Name, Positioned};
 
 #[derive(Default)]
 pub struct KnownDirectives {
@@ -14,20 +15,21 @@ impl<'a> Visitor<'a> for KnownDirectives {
     fn enter_operation_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
+        _name: Option<&'a Name>,
         operation_definition: &'a Positioned<OperationDefinition>,
     ) {
-        self.location_stack.push(match &operation_definition.node {
-            OperationDefinition::SelectionSet(_) | OperationDefinition::Query(_) => {
-                __DirectiveLocation::QUERY
-            }
-            OperationDefinition::Mutation(_) => __DirectiveLocation::MUTATION,
-            OperationDefinition::Subscription(_) => __DirectiveLocation::SUBSCRIPTION,
-        });
+        self.location_stack
+            .push(match &operation_definition.node.ty {
+                OperationType::Query => __DirectiveLocation::QUERY,
+                OperationType::Mutation => __DirectiveLocation::MUTATION,
+                OperationType::Subscription => __DirectiveLocation::SUBSCRIPTION,
+            });
     }
 
     fn exit_operation_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
+        _name: Option<&'a Name>,
         _operation_definition: &'a Positioned<OperationDefinition>,
     ) {
         self.location_stack.pop();
@@ -36,6 +38,7 @@ impl<'a> Visitor<'a> for KnownDirectives {
     fn enter_fragment_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
+        _name: &'a Name,
         _fragment_definition: &'a Positioned<FragmentDefinition>,
     ) {
         self.location_stack
@@ -45,6 +48,7 @@ impl<'a> Visitor<'a> for KnownDirectives {
     fn exit_fragment_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
+        _name: &'a Name,
         _fragment_definition: &'a Positioned<FragmentDefinition>,
     ) {
         self.location_stack.pop();
@@ -55,22 +59,26 @@ impl<'a> Visitor<'a> for KnownDirectives {
         ctx: &mut VisitorContext<'a>,
         directive: &'a Positioned<Directive>,
     ) {
-        if let Some(schema_directive) = ctx.registry.directives.get(directive.name.as_str()) {
+        if let Some(schema_directive) = ctx
+            .registry
+            .directives
+            .get(directive.node.name.node.as_str())
+        {
             if let Some(current_location) = self.location_stack.last() {
                 if !schema_directive.locations.contains(current_location) {
                     ctx.report_error(
-                        vec![directive.position()],
+                        vec![directive.pos],
                         format!(
                             "Directive \"{}\" may not be used on \"{:?}\"",
-                            directive.name, current_location
+                            directive.node.name.node, current_location
                         ),
                     )
                 }
             }
         } else {
             ctx.report_error(
-                vec![directive.position()],
-                format!("Unknown directive \"{}\"", directive.name),
+                vec![directive.pos],
+                format!("Unknown directive \"{}\"", directive.node.name.node),
             );
         }
     }
@@ -121,7 +129,6 @@ impl<'a> Visitor<'a> for KnownDirectives {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory() -> KnownDirectives {
         KnownDirectives::default()

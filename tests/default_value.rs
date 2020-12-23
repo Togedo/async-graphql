@@ -6,15 +6,15 @@ pub async fn test_default_value_arg() {
 
     #[Object]
     impl Query {
-        async fn value1(&self, #[arg(default = 100)] input: i32) -> i32 {
+        async fn value1(&self, #[graphql(default = 100)] input: i32) -> i32 {
             input
         }
 
-        async fn value2(&self, #[arg(default)] input: i32) -> i32 {
+        async fn value2(&self, #[graphql(default)] input: i32) -> i32 {
             input
         }
 
-        async fn value3(&self, #[arg(default_with = "1 + 2 + 3")] input: i32) -> i32 {
+        async fn value3(&self, #[graphql(default_with = "1 + 2 + 3")] input: i32) -> i32 {
             input
         }
     }
@@ -22,8 +22,8 @@ pub async fn test_default_value_arg() {
     let query = "{ value1 value2 value3 }";
     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "value1": 100,
             "value2": 0,
             "value3": 6,
@@ -33,8 +33,8 @@ pub async fn test_default_value_arg() {
     let query = "{ value1(input: 1) value2(input: 2) value3(input: 3) }";
     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "value1": 1,
             "value2": 2,
             "value3": 3,
@@ -44,19 +44,19 @@ pub async fn test_default_value_arg() {
 
 #[async_std::test]
 pub async fn test_default_value_inputobject() {
-    #[InputObject]
+    #[derive(InputObject)]
     struct MyInput {
-        #[field(default = 100)]
+        #[graphql(default = 100)]
         value1: i32,
 
-        #[field(default)]
+        #[graphql(default)]
         value2: i32,
 
-        #[field(default_with = "1 + 2 + 3")]
+        #[graphql(default_with = "1 + 2 + 3")]
         value3: i32,
     }
 
-    #[SimpleObject]
+    #[derive(SimpleObject)]
     struct MyOutput {
         value1: i32,
         value2: i32,
@@ -79,8 +79,8 @@ pub async fn test_default_value_inputobject() {
     let query = "{ value(input: {}) { value1 value2 value3 } }";
     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "value": {
                 "value1": 100,
                 "value2": 0,
@@ -92,8 +92,8 @@ pub async fn test_default_value_inputobject() {
     let query = "{ value(input: { value1: 1, value2: 2, value3: 3 }) { value1 value2 value3 } }";
     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "value": {
                 "value1": 1,
                 "value2": 2,

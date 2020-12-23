@@ -1,20 +1,29 @@
+#[cfg(test)]
+#[macro_use]
+mod test_harness;
+
 mod rules;
 mod suggestion;
 mod utils;
 mod visitor;
 mod visitors;
 
-#[cfg(test)]
-mod test_harness;
-
-use crate::parser::query::Document;
+use crate::parser::types::ExecutableDocument;
 use crate::registry::Registry;
-use crate::{CacheControl, Error, Result, Variables};
-use visitor::{visit, VisitorContext, VisitorNil};
+use crate::{CacheControl, ServerError, Variables};
 
-pub struct CheckResult {
+pub use visitor::VisitorContext;
+use visitor::{visit, VisitorNil};
+
+/// Validation results.
+pub struct ValidationResult {
+    /// Cache control
     pub cache_control: CacheControl,
+
+    /// Query complexity
     pub complexity: usize,
+
+    /// Query depth
     pub depth: usize,
 }
 
@@ -30,10 +39,10 @@ pub enum ValidationMode {
 
 pub fn check_rules(
     registry: &Registry,
-    doc: &Document,
+    doc: &ExecutableDocument,
     variables: Option<&Variables>,
     mode: ValidationMode,
-) -> Result<CheckResult> {
+) -> Result<ValidationResult, Vec<ServerError>> {
     let mut ctx = VisitorContext::new(registry, doc, variables);
     let mut cache_control = CacheControl::default();
     let mut complexity = 0;
@@ -50,13 +59,10 @@ pub fn check_rules(
                 .with(rules::NoFragmentCycles::default())
                 .with(rules::KnownFragmentNames)
                 .with(rules::KnownTypeNames)
-                .with(rules::LoneAnonymousOperation::default())
                 .with(rules::NoUndefinedVariables::default())
                 .with(rules::NoUnusedFragments::default())
                 .with(rules::NoUnusedVariables::default())
                 .with(rules::UniqueArgumentNames::default())
-                .with(rules::UniqueFragmentNames::default())
-                .with(rules::UniqueOperationNames::default())
                 .with(rules::UniqueVariableNames::default())
                 .with(rules::VariablesAreInputTypes)
                 .with(rules::VariableInAllowedPosition::default())
@@ -69,9 +75,7 @@ pub fn check_rules(
                 .with(visitors::CacheControlCalculate {
                     cache_control: &mut cache_control,
                 })
-                .with(visitors::ComplexityCalculate {
-                    complexity: &mut complexity,
-                })
+                .with(visitors::ComplexityCalculate::new(&mut complexity))
                 .with(visitors::DepthCalculate::new(&mut depth));
             visit(&mut visitor, &mut ctx, doc);
         }
@@ -82,20 +86,19 @@ pub fn check_rules(
                 .with(visitors::CacheControlCalculate {
                     cache_control: &mut cache_control,
                 })
-                .with(visitors::ComplexityCalculate {
-                    complexity: &mut complexity,
-                })
+                .with(visitors::ComplexityCalculate::new(&mut complexity))
                 .with(visitors::DepthCalculate::new(&mut depth));
             visit(&mut visitor, &mut ctx, doc);
         }
     }
 
     if !ctx.errors.is_empty() {
-        return Err(Error::Rule { errors: ctx.errors });
+        return Err(ctx.errors.into_iter().map(Into::into).collect());
     }
-    Ok(CheckResult {
+
+    Ok(ValidationResult {
         cache_control,
         complexity,
-        depth: depth as usize,
+        depth,
     })
 }

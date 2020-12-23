@@ -1,6 +1,6 @@
 # Actix-web
 
-`Async-graphql-actix-web`提供实现了`actix_web::FromRequest`的`GQLRequest`，它其实是QueryBuilder的包装，你可以调用`GQLRequest::into_inner`把它转换成一个`QueryBuilder`。
+`Async-graphql-actix-web`提供实现了`actix_web::FromRequest`的`Request`，它其实是`async_graphql::Request`的包装，你可以调用`Request::into_inner`把它转换成一个`async_graphql::Request`。
 
 `WSSubscription`是一个支持Web Socket订阅的Actor。
 
@@ -11,9 +11,9 @@
 ```rust
 async fn index(
     schema: web::Data<Schema>,
-    gql_request: GQLRequest,
-) -> web::Json<GQLResponse> {
-    web::Json(GQLResponse(gql_request.into_inner().execute(&schema).await))
+    request: async_graphql_actix_web::Request,
+) -> web::Json<Response> {
+    web::Json(Response(schema.execute(request.into_inner()).await)
 }
 
 ```
@@ -26,6 +26,10 @@ async fn index_ws(
     req: HttpRequest,
     payload: web::Payload,
 ) -> Result<HttpResponse> {
-    ws::start_with_protocols(WSSubscription::new(&schema), &["graphql-ws"], &req, payload)
+    WSSubscription::start(Schema::clone(&*schema), &req, payload)
 }
 ```
+
+## 更多例子
+
+[https://github.com/async-graphql/examples/tree/master/actix-web](https://github.com/async-graphql/examples/tree/master/actix-web)

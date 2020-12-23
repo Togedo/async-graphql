@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 /// Generate the page for GraphQL Playground
 ///
 /// # Example
@@ -551,7 +553,7 @@ pub fn playground_source(config: GraphQLPlaygroundConfig) -> String {
 </html>
   "##.replace("GRAPHQL_PLAYGROUND_CONFIG", &match serde_json::to_string(&config) {
             Ok(str) => str,
-            _ => "{}".to_string()
+            Err(_) => "{}".to_string()
         })
 }
 

@@ -1,14 +1,17 @@
+use std::borrow::Cow;
+
+use futures_util::stream::{Stream, StreamExt, TryStreamExt};
+use indexmap::map::IndexMap;
+
 use crate::connection::edge::Edge;
 use crate::connection::page_info::PageInfo;
+use crate::parser::types::Field;
+use crate::resolver_utils::{resolve_container, ContainerType};
 use crate::types::connection::{CursorType, EmptyFields};
 use crate::{
-    do_resolve, registry, Context, ContextSelectionSet, FieldResult, ObjectType, OutputValueType,
-    Positioned, QueryError, Result, Type,
+    registry, Context, ContextSelectionSet, ObjectType, OutputType, Positioned, Result,
+    ServerResult, Type, Value,
 };
-use async_graphql_parser::query::Field;
-use futures::{Stream, StreamExt, TryStreamExt};
-use indexmap::map::IndexMap;
-use std::borrow::Cow;
 
 /// Connection type
 ///
@@ -87,10 +90,10 @@ impl<C, T, EC, EE> Connection<C, T, EC, EE> {
         self.edges.extend(iter);
     }
 
-    /// Append edges with `IntoIterator<Item = Edge<C, T, EE>>`
-    pub fn try_append<I>(&mut self, iter: I) -> FieldResult<()>
+    /// Append edges with `IntoIterator<Item = Result<Edge<C, T, EE>, E>>`
+    pub fn try_append<I, E>(&mut self, iter: I) -> Result<(), E>
     where
-        I: IntoIterator<Item = FieldResult<Edge<C, T, EE>>>,
+        I: IntoIterator<Item = Result<Edge<C, T, EE>, E>>,
     {
         for edge in iter {
             self.edges.push(edge?);
@@ -98,7 +101,7 @@ impl<C, T, EC, EE> Connection<C, T, EC, EE> {
         Ok(())
     }
 
-    /// Append edges with `Stream<Item = FieldResult<Edge<C, T, EE>>>`
+    /// Append edges with `Stream<Item = Result<Edge<C, T, EE>>>`
     pub async fn append_stream<S>(&mut self, stream: S)
     where
         S: Stream<Item = Edge<C, T, EE>> + Unpin,
@@ -106,10 +109,10 @@ impl<C, T, EC, EE> Connection<C, T, EC, EE> {
         self.edges.extend(stream.collect::<Vec<_>>().await);
     }
 
-    /// Append edges with `Stream<Item = FieldResult<Edge<C, T, EE>>>`
-    pub async fn try_append_stream<S>(&mut self, stream: S) -> FieldResult<()>
+    /// Append edges with `Stream<Item = Result<Edge<C, T, EE>, E>>`
+    pub async fn try_append_stream<S, E>(&mut self, stream: S) -> Result<(), E>
     where
-        S: Stream<Item = FieldResult<Edge<C, T, EE>>> + Unpin,
+        S: Stream<Item = Result<Edge<C, T, EE>, E>> + Unpin,
     {
         self.edges.extend(stream.try_collect::<Vec<_>>().await?);
         Ok(())
@@ -119,7 +122,7 @@ impl<C, T, EC, EE> Connection<C, T, EC, EE> {
 impl<C, T, EC, EE> Type for Connection<C, T, EC, EE>
 where
     C: CursorType,
-    T: OutputValueType + Send + Sync,
+    T: OutputType + Send + Sync,
     EC: ObjectType + Sync + Send,
     EE: ObjectType + Sync + Send,
 {
@@ -156,6 +159,8 @@ where
                             external: false,
                             requires: None,
                             provides: None,
+                            visible: None,
+                            compute_complexity: None,
                         },
                     );
 
@@ -173,6 +178,8 @@ where
                             external: false,
                             requires: None,
                             provides: None,
+                            visible: None,
+                            compute_complexity: None,
                         },
                     );
 
@@ -182,50 +189,37 @@ where
                 cache_control: Default::default(),
                 extends: false,
                 keys: None,
+                visible: None,
             }
         })
     }
 }
 
 #[async_trait::async_trait]
-impl<C, T, EC, EE> ObjectType for Connection<C, T, EC, EE>
+impl<C, T, EC, EE> ContainerType for Connection<C, T, EC, EE>
 where
     C: CursorType + Send + Sync,
-    T: OutputValueType + Send + Sync,
+    T: OutputType + Send + Sync,
     EC: ObjectType + Sync + Send,
     EE: ObjectType + Sync + Send,
 {
-    async fn resolve_field(&self, ctx: &Context<'_>) -> Result<serde_json::Value> {
-        if ctx.name.node == "pageInfo" {
+    async fn resolve_field(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
+        if ctx.item.node.name.node == "pageInfo" {
             let page_info = PageInfo {
                 has_previous_page: self.has_previous_page,
                 has_next_page: self.has_next_page,
-                start_cursor: match self.edges.first() {
-                    Some(edge) => Some(edge.cursor.encode_cursor().map_err(|err| {
-                        QueryError::FieldError {
-                            err: err.to_string(),
-                            extended_error: None,
-                        }
-                        .into_error(ctx.position())
-                    })?),
-                    None => None,
-                },
-                end_cursor: match self.edges.last() {
-                    Some(edge) => Some(edge.cursor.encode_cursor().map_err(|err| {
-                        QueryError::FieldError {
-                            err: err.to_string(),
-                            extended_error: None,
-                        }
-                        .into_error(ctx.position())
-                    })?),
-                    None => None,
-                },
+                start_cursor: self.edges.first().map(|edge| edge.cursor.encode_cursor()),
+                end_cursor: self.edges.last().map(|edge| edge.cursor.encode_cursor()),
             };
-            let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-            return OutputValueType::resolve(&page_info, &ctx_obj, ctx.item).await;
-        } else if ctx.name.node == "edges" {
-            let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-            return OutputValueType::resolve(&self.edges, &ctx_obj, ctx.item).await;
+            let ctx_obj = ctx.with_selection_set(&ctx.item.node.selection_set);
+            return OutputType::resolve(&page_info, &ctx_obj, ctx.item)
+                .await
+                .map(Some);
+        } else if ctx.item.node.name.node == "edges" {
+            let ctx_obj = ctx.with_selection_set(&ctx.item.node.selection_set);
+            return OutputType::resolve(&self.edges, &ctx_obj, ctx.item)
+                .await
+                .map(Some);
         }
 
         self.additional_fields.resolve_field(ctx).await
@@ -233,10 +227,10 @@ where
 }
 
 #[async_trait::async_trait]
-impl<C, T, EC, EE> OutputValueType for Connection<C, T, EC, EE>
+impl<C, T, EC, EE> OutputType for Connection<C, T, EC, EE>
 where
     C: CursorType + Send + Sync,
-    T: OutputValueType + Send + Sync,
+    T: OutputType + Send + Sync,
     EC: ObjectType + Sync + Send,
     EE: ObjectType + Sync + Send,
 {
@@ -244,7 +238,16 @@ where
         &self,
         ctx: &ContextSelectionSet<'_>,
         _field: &Positioned<Field>,
-    ) -> Result<serde_json::Value> {
-        do_resolve(ctx, self).await
+    ) -> ServerResult<Value> {
+        resolve_container(ctx, self).await
     }
+}
+
+impl<C, T, EC, EE> ObjectType for Connection<C, T, EC, EE>
+where
+    C: CursorType + Send + Sync,
+    T: OutputType + Send + Sync,
+    EC: ObjectType + Sync + Send,
+    EE: ObjectType + Sync + Send,
+{
 }

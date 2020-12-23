@@ -8,9 +8,9 @@ use async_graphql::*;
 pub async fn test_input_validator_string_min_length() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputMaxLength {
-        #[field(validator(StringMinLength(length = "6")))]
+        #[graphql(validator(StringMinLength(length = "6")))]
         pub id: String,
     }
 
@@ -18,7 +18,7 @@ pub async fn test_input_validator_string_min_length() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(StringMinLength(length = "6")))] _id: String,
+            #[graphql(validator(StringMinLength(length = "6")))] _id: String,
         ) -> bool {
             true
         }
@@ -62,32 +62,34 @@ pub async fn test_input_validator_string_min_length() {
                 schema
                     .execute(&field_query)
                     .await
-                    .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                    .into_result()
+                    .expect_err(&should_fail_msg),
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test_string = {}", case);
@@ -95,9 +97,10 @@ pub async fn test_input_validator_string_min_length() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with StringMinLength",
                 case
             );
@@ -106,9 +109,10 @@ pub async fn test_input_validator_string_min_length() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with StringMinLength",
                 case
             );
@@ -120,9 +124,9 @@ pub async fn test_input_validator_string_min_length() {
 pub async fn test_input_validator_string_max_length() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputMaxLength {
-        #[field(validator(StringMaxLength(length = "6")))]
+        #[graphql(validator(StringMaxLength(length = "6")))]
         pub id: String,
     }
 
@@ -130,7 +134,7 @@ pub async fn test_input_validator_string_max_length() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(StringMaxLength(length = "6")))] _id: String,
+            #[graphql(validator(StringMaxLength(length = "6")))] _id: String,
         ) -> bool {
             true
         }
@@ -168,32 +172,34 @@ pub async fn test_input_validator_string_max_length() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test_string = {}", case);
@@ -201,9 +207,10 @@ pub async fn test_input_validator_string_max_length() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with StringMaxLength",
                 case
             );
@@ -212,9 +219,10 @@ pub async fn test_input_validator_string_max_length() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with StringMaxLength",
                 case
             );
@@ -226,15 +234,15 @@ pub async fn test_input_validator_string_max_length() {
 pub async fn test_input_validator_string_email() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputEmail {
-        #[field(validator(Email))]
+        #[graphql(validator(Email))]
         pub email: String,
     }
 
     #[Object]
     impl QueryRoot {
-        async fn field_parameter(&self, #[arg(validator(Email))] _email: String) -> bool {
+        async fn field_parameter(&self, #[graphql(validator(Email))] _email: String) -> bool {
             true
         }
 
@@ -292,25 +300,26 @@ pub async fn test_input_validator_string_email() {
                 case
             );
             let field_error_msg =
-                format!("Invalid value for argument \"email\", invalid email format");
+                "Invalid value for argument \"email\", invalid email format".to_owned();
             let object_error_msg =
-                format!("Invalid value for argument \"input.email\", invalid email format");
+                "Invalid value for argument \"input.email\", invalid email format".to_owned();
 
             // Testing FieldValidator
             assert_eq!(
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             // Testing ObjectValidator
@@ -318,16 +327,17 @@ pub async fn test_input_validator_string_email() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test_string = {}", case);
@@ -337,9 +347,10 @@ pub async fn test_input_validator_string_email() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with Email",
                 case
             );
@@ -348,9 +359,10 @@ pub async fn test_input_validator_string_email() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with Email",
                 case
             );
@@ -363,15 +375,15 @@ pub async fn test_input_validator_string_mac() {
     struct QueryRootWithColon;
     struct QueryRootWithoutColon;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputMACWithColon {
-        #[field(validator(MAC(colon = "true")))]
+        #[graphql(validator(MAC(colon = "true")))]
         pub mac: String,
     }
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputMACWithoutColon {
-        #[field(validator(MAC(colon = "false")))]
+        #[graphql(validator(MAC(colon = "false")))]
         pub mac: String,
     }
 
@@ -379,7 +391,7 @@ pub async fn test_input_validator_string_mac() {
     impl QueryRootWithColon {
         async fn field_parameter(
             &self,
-            #[arg(validator(MAC(colon = "true")))] _mac: String,
+            #[graphql(validator(MAC(colon = "true")))] _mac: String,
         ) -> bool {
             true
         }
@@ -393,7 +405,7 @@ pub async fn test_input_validator_string_mac() {
     impl QueryRootWithoutColon {
         async fn field_parameter(
             &self,
-            #[arg(validator(MAC(colon = "false")))] _mac: String,
+            #[graphql(validator(MAC(colon = "false")))] _mac: String,
         ) -> bool {
             true
         }
@@ -437,24 +449,25 @@ pub async fn test_input_validator_string_mac() {
             "MAC validation case {} should have failed, but did not",
             mac
         );
-        let field_error_msg = format!("Invalid value for argument \"mac\", invalid MAC format");
+        let field_error_msg = "Invalid value for argument \"mac\", invalid MAC format".to_owned();
         let object_error_msg =
-            format!("Invalid value for argument \"input.mac\", invalid MAC format");
+            "Invalid value for argument \"input.mac\", invalid MAC format".to_owned();
 
         assert_eq!(
             schema_without_colon
                 .execute(&field_query)
                 .await
+                .into_result()
                 .expect_err(&should_fail_msg[..]),
-            Error::Rule {
-                errors: vec!(RuleError {
-                    locations: vec!(Pos {
-                        line: 1,
-                        column: 17
-                    }),
-                    message: field_error_msg.clone()
-                })
-            }
+            vec![ServerError {
+                message: field_error_msg.clone(),
+                locations: vec!(Pos {
+                    line: 1,
+                    column: 17
+                }),
+                path: Vec::new(),
+                extensions: None,
+            }]
         );
 
         // Testing ObjectValidator
@@ -462,32 +475,34 @@ pub async fn test_input_validator_string_mac() {
             schema_without_colon
                 .execute(&object_query)
                 .await
+                .into_result()
                 .expect_err(&should_fail_msg[..]),
-            Error::Rule {
-                errors: vec!(RuleError {
-                    locations: vec!(Pos {
-                        line: 1,
-                        column: 14
-                    }),
-                    message: object_error_msg.clone()
-                })
-            }
+            vec![ServerError {
+                message: object_error_msg.clone(),
+                locations: vec!(Pos {
+                    line: 1,
+                    column: 14
+                }),
+                path: Vec::new(),
+                extensions: None,
+            }]
         );
 
         assert_eq!(
             schema_with_colon
                 .execute(&field_query)
                 .await
+                .into_result()
                 .expect_err(&should_fail_msg[..]),
-            Error::Rule {
-                errors: vec!(RuleError {
-                    locations: vec!(Pos {
-                        line: 1,
-                        column: 17
-                    }),
-                    message: field_error_msg
-                })
-            }
+            vec![ServerError {
+                message: field_error_msg,
+                locations: vec!(Pos {
+                    line: 1,
+                    column: 17
+                }),
+                path: Vec::new(),
+                extensions: None,
+            }]
         );
 
         // Testing ObjectValidator
@@ -495,30 +510,31 @@ pub async fn test_input_validator_string_mac() {
             schema_with_colon
                 .execute(&object_query)
                 .await
+                .into_result()
                 .expect_err(&should_fail_msg[..]),
-            Error::Rule {
-                errors: vec!(RuleError {
-                    locations: vec!(Pos {
-                        line: 1,
-                        column: 14
-                    }),
-                    message: object_error_msg
-                })
-            }
+            vec![ServerError {
+                message: object_error_msg,
+                locations: vec!(Pos {
+                    line: 1,
+                    column: 14
+                }),
+                path: Vec::new(),
+                extensions: None,
+            }]
         );
     }
 
     for mac in valid_macs {
         let field_query = format!("{{fieldParameter(mac: \"{}\")}}", mac);
         let object_query = format!("{{inputObject(input: {{mac: \"{}\"}})}}", mac);
-        let contains_colon = mac.contains(":");
+        let contains_colon = mac.contains(':');
         let should_fail_msg = format!(
             "MAC validation case {} should have failed, but did not",
             mac
         );
-        let field_error_msg = format!("Invalid value for argument \"mac\", invalid MAC format");
+        let field_error_msg = "Invalid value for argument \"mac\", invalid MAC format".to_owned();
         let object_error_msg =
-            format!("Invalid value for argument \"input.mac\", invalid MAC format");
+            "Invalid value for argument \"input.mac\", invalid MAC format".to_owned();
         let error_msg = format!("Schema returned error with test_string = {}", mac);
 
         if contains_colon {
@@ -527,9 +543,10 @@ pub async fn test_input_validator_string_mac() {
                 schema_with_colon
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with MAC",
                 mac
             );
@@ -538,9 +555,10 @@ pub async fn test_input_validator_string_mac() {
                 schema_with_colon
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with MAC",
                 mac
             );
@@ -549,16 +567,17 @@ pub async fn test_input_validator_string_mac() {
                 schema_without_colon
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             // Testing ObjectValidator
@@ -566,25 +585,27 @@ pub async fn test_input_validator_string_mac() {
                 schema_without_colon
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             assert_eq!(
                 schema_without_colon
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with MAC",
                 mac
             );
@@ -593,9 +614,10 @@ pub async fn test_input_validator_string_mac() {
                 schema_without_colon
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with MAC",
                 mac
             );
@@ -604,16 +626,17 @@ pub async fn test_input_validator_string_mac() {
                 schema_with_colon
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             // Testing ObjectValidator
@@ -621,16 +644,17 @@ pub async fn test_input_validator_string_mac() {
                 schema_with_colon
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         }
     }
@@ -640,9 +664,9 @@ pub async fn test_input_validator_string_mac() {
 pub async fn test_input_validator_int_range() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputIntRange {
-        #[field(validator(IntRange(min = "-2", max = "5")))]
+        #[graphql(validator(IntRange(min = "-2", max = "5")))]
         pub id: i32,
     }
 
@@ -650,7 +674,7 @@ pub async fn test_input_validator_int_range() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(IntRange(min = "-2", max = "5")))] _id: i32,
+            #[graphql(validator(IntRange(min = "-2", max = "5")))] _id: i32,
         ) -> bool {
             true
         }
@@ -680,32 +704,34 @@ pub async fn test_input_validator_int_range() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {}", case);
@@ -713,9 +739,10 @@ pub async fn test_input_validator_int_range() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with IntRange",
                 case
             );
@@ -724,9 +751,10 @@ pub async fn test_input_validator_int_range() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with IntRange",
                 case
             );
@@ -738,9 +766,9 @@ pub async fn test_input_validator_int_range() {
 pub async fn test_input_validator_int_less_than() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputIntLessThan {
-        #[field(validator(IntLessThan(value = "5")))]
+        #[graphql(validator(IntLessThan(value = "5")))]
         pub id: i32,
     }
 
@@ -748,7 +776,7 @@ pub async fn test_input_validator_int_less_than() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(IntLessThan(value = "5")))] _id: i32,
+            #[graphql(validator(IntLessThan(value = "5")))] _id: i32,
         ) -> bool {
             true
         }
@@ -781,32 +809,34 @@ pub async fn test_input_validator_int_less_than() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {}", case);
@@ -814,9 +844,10 @@ pub async fn test_input_validator_int_less_than() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with IntLessThan",
                 case
             );
@@ -825,9 +856,10 @@ pub async fn test_input_validator_int_less_than() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with IntLessThan",
                 case
             );
@@ -839,9 +871,9 @@ pub async fn test_input_validator_int_less_than() {
 pub async fn test_input_validator_int_greater_than() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputIntGreaterThan {
-        #[field(validator(IntGreaterThan(value = "3")))]
+        #[graphql(validator(IntGreaterThan(value = "3")))]
         pub id: i32,
     }
 
@@ -849,7 +881,7 @@ pub async fn test_input_validator_int_greater_than() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(IntGreaterThan(value = "3")))] _id: i32,
+            #[graphql(validator(IntGreaterThan(value = "3")))] _id: i32,
         ) -> bool {
             true
         }
@@ -884,32 +916,34 @@ pub async fn test_input_validator_int_greater_than() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {}", case);
@@ -917,9 +951,10 @@ pub async fn test_input_validator_int_greater_than() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with IntGreaterThan",
                 case
             );
@@ -928,9 +963,10 @@ pub async fn test_input_validator_int_greater_than() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with IntGreaterThan",
                 case
             );
@@ -942,15 +978,15 @@ pub async fn test_input_validator_int_greater_than() {
 pub async fn test_input_validator_int_nonzero() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputIntNonZero {
-        #[field(validator(IntNonZero))]
+        #[graphql(validator(IntNonZero))]
         pub id: i32,
     }
 
     #[Object]
     impl QueryRoot {
-        async fn field_parameter(&self, #[arg(validator(IntNonZero))] _id: i32) -> bool {
+        async fn field_parameter(&self, #[graphql(validator(IntNonZero))] _id: i32) -> bool {
             true
         }
 
@@ -980,32 +1016,34 @@ pub async fn test_input_validator_int_nonzero() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {}", case);
@@ -1013,9 +1051,10 @@ pub async fn test_input_validator_int_nonzero() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with IntNonZero",
                 case
             );
@@ -1024,9 +1063,10 @@ pub async fn test_input_validator_int_nonzero() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with IntNonZero",
                 case
             );
@@ -1038,15 +1078,18 @@ pub async fn test_input_validator_int_nonzero() {
 pub async fn test_input_validator_int_equal() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputIntEqual {
-        #[field(validator(IntEqual(value = "5")))]
+        #[graphql(validator(IntEqual(value = "5")))]
         pub id: i32,
     }
 
     #[Object]
     impl QueryRoot {
-        async fn field_parameter(&self, #[arg(validator(IntEqual(value = "5")))] _id: i32) -> bool {
+        async fn field_parameter(
+            &self,
+            #[graphql(validator(IntEqual(value = "5")))] _id: i32,
+        ) -> bool {
             true
         }
 
@@ -1058,7 +1101,7 @@ pub async fn test_input_validator_int_equal() {
     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
     let equal_to = 5;
 
-    for case in -10..10 {
+    for case in -10i32..10 {
         let field_query = format!("{{fieldParameter(id: {})}}", case);
         let object_query = format!("{{inputObject(input: {{id: {}}})}}", case);
         if case != equal_to {
@@ -1077,32 +1120,34 @@ pub async fn test_input_validator_int_equal() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {}", case);
@@ -1110,9 +1155,10 @@ pub async fn test_input_validator_int_equal() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with IntEqual",
                 case
             );
@@ -1121,9 +1167,10 @@ pub async fn test_input_validator_int_equal() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with IntEqual",
                 case
             );
@@ -1135,9 +1182,9 @@ pub async fn test_input_validator_int_equal() {
 pub async fn test_input_validator_list_max_length() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputListMaxLength {
-        #[field(validator(ListMaxLength(length = "5")))]
+        #[graphql(validator(ListMaxLength(length = "5")))]
         pub id: Vec<i32>,
     }
 
@@ -1145,7 +1192,7 @@ pub async fn test_input_validator_list_max_length() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(ListMaxLength(length = "5")))] _id: Vec<i32>,
+            #[graphql(validator(ListMaxLength(length = "5")))] _id: Vec<i32>,
         ) -> bool {
             true
         }
@@ -1189,32 +1236,34 @@ pub async fn test_input_validator_list_max_length() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {:?}", case);
@@ -1222,9 +1271,10 @@ pub async fn test_input_validator_list_max_length() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {:?} with ListMaxLength",
                 case
             );
@@ -1233,9 +1283,10 @@ pub async fn test_input_validator_list_max_length() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {:?} with ListMaxLength",
                 case
             );
@@ -1247,9 +1298,9 @@ pub async fn test_input_validator_list_max_length() {
 pub async fn test_input_validator_list_min_length() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputListMinLength {
-        #[field(validator(ListMinLength(length = "4")))]
+        #[graphql(validator(ListMinLength(length = "4")))]
         pub id: Vec<i32>,
     }
 
@@ -1257,7 +1308,7 @@ pub async fn test_input_validator_list_min_length() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(ListMinLength(length = "4")))] _id: Vec<i32>,
+            #[graphql(validator(ListMinLength(length = "4")))] _id: Vec<i32>,
         ) -> bool {
             true
         }
@@ -1301,32 +1352,34 @@ pub async fn test_input_validator_list_min_length() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {:?}", case);
@@ -1334,9 +1387,10 @@ pub async fn test_input_validator_list_min_length() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {:?} with ListMinLength",
                 case
             );
@@ -1345,9 +1399,10 @@ pub async fn test_input_validator_list_min_length() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {:?} with ListMinLength",
                 case
             );
@@ -1359,9 +1414,9 @@ pub async fn test_input_validator_list_min_length() {
 pub async fn test_input_validator_operator_or() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputOrValidator {
-        #[field(validator(or(Email, MAC(colon = "false"))))]
+        #[graphql(validator(or(Email, MAC(colon = "false"))))]
         pub id: String,
     }
 
@@ -1369,7 +1424,7 @@ pub async fn test_input_validator_operator_or() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(or(Email, MAC(colon = "false"))))] _id: String,
+            #[graphql(validator(or(Email, MAC(colon = "false"))))] _id: String,
         ) -> bool {
             true
         }
@@ -1413,39 +1468,42 @@ pub async fn test_input_validator_operator_or() {
                 case
             );
 
-            let field_error_msg = format!("Invalid value for argument \"id\", invalid MAC format");
+            let field_error_msg =
+                "Invalid value for argument \"id\", invalid MAC format".to_owned();
             let object_error_msg =
-                format!("Invalid value for argument \"input.id\", invalid MAC format");
+                "Invalid value for argument \"input.id\", invalid MAC format".to_owned();
             assert_eq!(
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {:?}", case);
@@ -1453,9 +1511,10 @@ pub async fn test_input_validator_operator_or() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {:?} with OR operator",
                 case
             );
@@ -1464,9 +1523,10 @@ pub async fn test_input_validator_operator_or() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {:?} with OR operator",
                 case
             );
@@ -1478,9 +1538,9 @@ pub async fn test_input_validator_operator_or() {
 pub async fn test_input_validator_operator_and() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputAndValidator {
-        #[field(validator(and(Email, StringMinLength(length = "14"))))]
+        #[graphql(validator(and(Email, StringMinLength(length = "14"))))]
         pub email: String,
     }
 
@@ -1488,7 +1548,7 @@ pub async fn test_input_validator_operator_and() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(and(Email, StringMinLength(length = "14"))))] _email: String,
+            #[graphql(validator(and(Email, StringMinLength(length = "14"))))] _email: String,
         ) -> bool {
             true
         }
@@ -1518,13 +1578,13 @@ pub async fn test_input_validator_operator_and() {
             );
 
             let field_error_msg = if *should_be_invalid_email {
-                format!("Invalid value for argument \"email\", invalid email format")
+                "Invalid value for argument \"email\", invalid email format".to_owned()
             } else {
                 format!("Invalid value for argument \"email\", the value length is {}, must be greater than or equal to {}", case_length, min_length)
             };
 
             let object_error_msg = if *should_be_invalid_email {
-                format!("Invalid value for argument \"input.email\", invalid email format")
+                "Invalid value for argument \"input.email\", invalid email format".to_owned()
             } else {
                 format!("Invalid value for argument \"input.email\", the value length is {}, must be greater than or equal to {}", case_length, min_length)
             };
@@ -1533,32 +1593,34 @@ pub async fn test_input_validator_operator_and() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 17
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 17
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 14
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 14
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test case = {:?}", case);
@@ -1566,9 +1628,10 @@ pub async fn test_input_validator_operator_and() {
                 schema
                     .execute(&field_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {:?} with AND operator",
                 case
             );
@@ -1577,9 +1640,10 @@ pub async fn test_input_validator_operator_and() {
                 schema
                     .execute(&object_query)
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {:?} with AND operator",
                 case
             );
@@ -1591,9 +1655,9 @@ pub async fn test_input_validator_operator_and() {
 pub async fn test_input_validator_variable() {
     struct QueryRoot;
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct InputMaxLength {
-        #[field(validator(StringMinLength(length = "6")))]
+        #[graphql(validator(StringMinLength(length = "6")))]
         pub id: String,
     }
 
@@ -1601,7 +1665,7 @@ pub async fn test_input_validator_variable() {
     impl QueryRoot {
         async fn field_parameter(
             &self,
-            #[arg(validator(StringMinLength(length = "6")))] _id: String,
+            #[graphql(validator(StringMinLength(length = "6")))] _id: String,
         ) -> bool {
             true
         }
@@ -1624,7 +1688,9 @@ pub async fn test_input_validator_variable() {
     let validator_length = 6;
     for case in &test_cases {
         let mut variables = Variables::default();
-        variables.insert("id".to_string(), Value::String(case.to_string()));
+        variables
+            .0
+            .insert(Name::new("id"), Value::String(case.to_string()));
 
         let field_query = "query($id: String!) {fieldParameter(id: $id)}";
         let object_query = "query($id: String!) {inputObject(input: {id: $id})}";
@@ -1646,60 +1712,60 @@ pub async fn test_input_validator_variable() {
             );
 
             assert_eq!(
-                QueryBuilder::new(field_query)
-                    .variables(variables.clone())
-                    .execute(&schema)
+                schema
+                    .execute(Request::new(field_query).variables(variables.clone()))
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 37
-                        }),
-                        message: field_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: field_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 37
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
 
             assert_eq!(
-                QueryBuilder::new(object_query)
-                    .variables(variables.clone())
-                    .execute(&schema)
+                schema
+                    .execute(Request::new(object_query).variables(variables.clone()))
                     .await
+                    .into_result()
                     .expect_err(&should_fail_msg[..]),
-                Error::Rule {
-                    errors: vec!(RuleError {
-                        locations: vec!(Pos {
-                            line: 1,
-                            column: 34
-                        }),
-                        message: object_error_msg
-                    })
-                }
+                vec![ServerError {
+                    message: object_error_msg,
+                    locations: vec!(Pos {
+                        line: 1,
+                        column: 34
+                    }),
+                    path: Vec::new(),
+                    extensions: None,
+                }]
             );
         } else {
             let error_msg = format!("Schema returned error with test_string = {}", case);
             assert_eq!(
-                QueryBuilder::new(field_query)
-                    .variables(variables.clone())
-                    .execute(&schema)
+                schema
+                    .execute(Request::new(field_query).variables(variables.clone()))
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"fieldParameter": true}),
+                value!({"fieldParameter": true}),
                 "Failed to validate {} with StringMinLength",
                 case
             );
 
             assert_eq!(
-                QueryBuilder::new(object_query)
-                    .variables(variables.clone())
-                    .execute(&schema)
+                schema
+                    .execute(Request::new(object_query).variables(variables.clone()))
                     .await
+                    .into_result()
                     .expect(&error_msg[..])
                     .data,
-                serde_json::json!({"inputObject": true}),
+                value!({"inputObject": true}),
                 "Failed to validate {} with StringMinLength",
                 case
             );

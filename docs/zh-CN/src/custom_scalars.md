@@ -15,12 +15,12 @@ struct StringNumber(i64);
 #[Scalar]
 impl ScalarType for StringNumber {
     fn parse(value: Value) -> InputValueResult<Self> {
-        if let Value::String(value) = value {
+        if let Value::String(value) = &value {
             // 解析整数
-            value.parse().map(StringNumber)?
+            Ok(value.parse().map(StringNumber)?)
         } else {
             // 类型不匹配
-            InputValueError::ExpectedType
+            Err(InputValueError::expected_type(value))
         }
     }
 
@@ -29,4 +29,24 @@ impl ScalarType for StringNumber {
     }
 }
 
+```
+
+## 使用`scalar!`宏定义标量
+
+如果你的类型实现了`serde :: Serialize`和`serde :: Deserialize`，那么可以使用此宏更简单地定义标量。
+
+```rust
+#[derive(Serialize, Deserialize)]
+struct MyValue {
+    a: i32,
+    b: HashMap<String, i32>,     
+}
+
+scalar!(MyValue);
+
+// 重命名为`MV`.
+// scalar!(MyValue, "MV");
+
+// 重命名为`MV`并且添加描述.
+// scalar!(MyValue, "MV", "This is my value");
 ```

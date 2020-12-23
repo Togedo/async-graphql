@@ -1,12 +1,15 @@
+use std::borrow::Cow;
+
+use indexmap::map::IndexMap;
+
 use crate::connection::EmptyFields;
+use crate::parser::types::Field;
+use crate::resolver_utils::{resolve_container, ContainerType};
 use crate::types::connection::CursorType;
 use crate::{
-    do_resolve, registry, Context, ContextSelectionSet, ObjectType, OutputValueType, Positioned,
-    QueryError, Result, Type,
+    registry, Context, ContextSelectionSet, ObjectType, OutputType, Positioned, ServerResult, Type,
+    Value,
 };
-use async_graphql_parser::query::Field;
-use indexmap::map::IndexMap;
-use std::borrow::Cow;
 
 /// The edge type output by the data source
 pub struct Edge<C, T, E> {
@@ -40,7 +43,7 @@ impl<C: CursorType, T> Edge<C, T, EmptyFields> {
 impl<C, T, E> Type for Edge<C, T, E>
 where
     C: CursorType,
-    T: OutputValueType + Send + Sync,
+    T: OutputType + Send + Sync,
     E: ObjectType + Sync + Send,
 {
     fn type_name() -> Cow<'static, str> {
@@ -49,9 +52,8 @@ where
 
     fn create_type_info(registry: &mut registry::Registry) -> String {
         registry.create_type::<Self, _>(|registry| {
-            E::create_type_info(registry);
-            let additional_fields = if let Some(registry::MetaType::Object { fields, .. }) =
-                registry.types.remove(E::type_name().as_ref())
+            let additional_fields = if let registry::MetaType::Object { fields, .. } =
+                registry.create_dummy_type::<E>()
             {
                 fields
             } else {
@@ -76,6 +78,8 @@ where
                             external: false,
                             requires: None,
                             provides: None,
+                            visible: None,
+                            compute_complexity: None,
                         },
                     );
 
@@ -91,6 +95,8 @@ where
                             external: false,
                             requires: None,
                             provides: None,
+                            visible: None,
+                            compute_complexity: None,
                         },
                     );
 
@@ -100,34 +106,27 @@ where
                 cache_control: Default::default(),
                 extends: false,
                 keys: None,
+                visible: None,
             }
         })
     }
 }
 
 #[async_trait::async_trait]
-impl<C, T, E> ObjectType for Edge<C, T, E>
+impl<C, T, E> ContainerType for Edge<C, T, E>
 where
     C: CursorType + Send + Sync,
-    T: OutputValueType + Send + Sync,
+    T: OutputType + Send + Sync,
     E: ObjectType + Sync + Send,
 {
-    async fn resolve_field(&self, ctx: &Context<'_>) -> Result<serde_json::Value> {
-        if ctx.name.node == "node" {
-            let ctx_obj = ctx.with_selection_set(&ctx.selection_set);
-            return OutputValueType::resolve(&self.node, &ctx_obj, ctx.item).await;
-        } else if ctx.name.node == "cursor" {
-            return Ok(self
-                .cursor
-                .encode_cursor()
-                .map_err(|err| {
-                    QueryError::FieldError {
-                        err: err.to_string(),
-                        extended_error: None,
-                    }
-                    .into_error(ctx.position())
-                })?
-                .into());
+    async fn resolve_field(&self, ctx: &Context<'_>) -> ServerResult<Option<Value>> {
+        if ctx.item.node.name.node == "node" {
+            let ctx_obj = ctx.with_selection_set(&ctx.item.node.selection_set);
+            return OutputType::resolve(&self.node, &ctx_obj, ctx.item)
+                .await
+                .map(Some);
+        } else if ctx.item.node.name.node == "cursor" {
+            return Ok(Some(Value::String(self.cursor.encode_cursor())));
         }
 
         self.additional_fields.resolve_field(ctx).await
@@ -135,17 +134,25 @@ where
 }
 
 #[async_trait::async_trait]
-impl<C, T, E> OutputValueType for Edge<C, T, E>
+impl<C, T, E> OutputType for Edge<C, T, E>
 where
     C: CursorType + Send + Sync,
-    T: OutputValueType + Send + Sync,
+    T: OutputType + Send + Sync,
     E: ObjectType + Sync + Send,
 {
     async fn resolve(
         &self,
         ctx: &ContextSelectionSet<'_>,
         _field: &Positioned<Field>,
-    ) -> Result<serde_json::Value> {
-        do_resolve(ctx, self).await
+    ) -> ServerResult<Value> {
+        resolve_container(ctx, self).await
     }
+}
+
+impl<C, T, E> ObjectType for Edge<C, T, E>
+where
+    C: CursorType + Send + Sync,
+    T: OutputType + Send + Sync,
+    E: ObjectType + Sync + Send,
+{
 }

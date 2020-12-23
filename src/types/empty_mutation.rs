@@ -1,9 +1,11 @@
-use crate::{
-    registry, Context, ContextSelectionSet, Error, ObjectType, OutputValueType, Positioned,
-    QueryError, Result, Type,
-};
-use async_graphql_parser::query::Field;
 use std::borrow::Cow;
+
+use crate::parser::types::Field;
+use crate::resolver_utils::ContainerType;
+use crate::{
+    registry, Context, ContextSelectionSet, ObjectType, OutputType, Positioned, ServerError,
+    ServerResult, Type, Value,
+};
 
 /// Empty mutation
 ///
@@ -17,12 +19,16 @@ use std::borrow::Cow;
 /// struct QueryRoot;
 ///
 /// #[Object]
-/// impl QueryRoot {}
-///
-/// fn main() {
-///     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
+/// impl QueryRoot {
+///     async fn value(&self) -> i32 {
+///         // A GraphQL Object type must define one or more fields.
+///         100
+///     }
 /// }
+///
+/// let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
 /// ```
+#[derive(Default, Copy, Clone)]
 pub struct EmptyMutation;
 
 impl Type for EmptyMutation {
@@ -38,32 +44,31 @@ impl Type for EmptyMutation {
             cache_control: Default::default(),
             extends: false,
             keys: None,
+            visible: None,
         })
     }
 }
 
 #[async_trait::async_trait]
-impl ObjectType for EmptyMutation {
+impl ContainerType for EmptyMutation {
     fn is_empty() -> bool {
         true
     }
 
-    async fn resolve_field(&self, _ctx: &Context<'_>) -> Result<serde_json::Value> {
+    async fn resolve_field(&self, _ctx: &Context<'_>) -> ServerResult<Option<Value>> {
         unreachable!()
     }
 }
 
 #[async_trait::async_trait]
-impl OutputValueType for EmptyMutation {
+impl OutputType for EmptyMutation {
     async fn resolve(
         &self,
         _ctx: &ContextSelectionSet<'_>,
         field: &Positioned<Field>,
-    ) -> Result<serde_json::Value> {
-        Err(Error::Query {
-            pos: field.position(),
-            path: None,
-            err: QueryError::NotConfiguredMutations,
-        })
+    ) -> ServerResult<Value> {
+        Err(ServerError::new("Schema is not configured for mutations.").at(field.pos))
     }
 }
+
+impl ObjectType for EmptyMutation {}

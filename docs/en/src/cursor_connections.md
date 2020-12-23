@@ -1,8 +1,8 @@
 # Cursor connections
 
-Relay's cursor connection specification is defined to provide a consistent method for query paging. For more details on the specification see the [GraphQL Cursor Connections Specification](https://facebook.github.io/relay/graphql/connections.htm)。
+Relay's cursor connection specification is designed to provide a consistent method for query paging. For more details on the specification see the [GraphQL Cursor Connections Specification](https://facebook.github.io/relay/graphql/connections.htm)。
 
-Define a cursor connection in `async-graphql` is very simple, you just call the `connection::query` function and query data in closure.
+Defining a cursor connection in `async-graphql` is very simple, you just call the `connection::query` function and query data in the closure.
 
 ```rust
 use async_graphql::*;
@@ -12,13 +12,12 @@ struct Query;
 
 #[Object]
 impl Query {
-    #[field]
     async fn numbers(&self,
         after: Option<String>,
         before: Option<String>,
         first: Option<i32>,
         last: Option<i32>,
-    ) -> FieldResult<Connection<usize, i32, EmptyFields, EmptyFields>> {
+    ) -> Result<Connection<usize, i32, EmptyFields, EmptyFields>> {
         query(after, before, first, last, |after, before, first, last| {
             let mut start = after.map(|after| after + 1).unwrap_or(0);
             let mut end = before.unwrap_or(10000);

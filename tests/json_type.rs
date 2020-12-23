@@ -45,8 +45,8 @@ pub async fn test_json_scalar() {
     );
     let query = r#"{ data dataOutput dataOutputClone }"#;
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.data,
+        value!({
             "data": { "a": 10, "b": 20},
             "dataOutput": { "a": 10, "b": 20},
             "dataOutputClone": { "a": 10, "b": 20},

@@ -5,16 +5,18 @@ mod cursor;
 mod edge;
 mod page_info;
 
-use crate::FieldResult;
+use std::fmt::Display;
+use std::future::Future;
+
+use crate::{Result, SimpleObject};
 pub use connection_type::Connection;
 pub use cursor::CursorType;
 pub use edge::Edge;
-use futures::Future;
 pub use page_info::PageInfo;
-use std::fmt::Display;
 
 /// Empty additional fields
-#[async_graphql_derive::SimpleObject(internal)]
+#[derive(SimpleObject)]
+#[graphql(internal, dummy)]
 pub struct EmptyFields;
 
 /// Parses the parameters and executes the query.
@@ -29,7 +31,7 @@ pub struct EmptyFields;
 ///
 /// struct Numbers;
 ///
-/// #[SimpleObject]
+/// #[derive(SimpleObject)]
 /// struct Diff {
 ///     diff: i32,
 /// }
@@ -41,7 +43,7 @@ pub struct EmptyFields;
 ///         before: Option<String>,
 ///         first: Option<i32>,
 ///         last: Option<i32>
-///     ) -> FieldResult<Connection<usize, i32, EmptyFields, Diff>> {
+///     ) -> Result<Connection<usize, i32, EmptyFields, Diff>> {
 ///         query(after, before, first, last, |after, before, first, last| async move {
 ///             let mut start = after.map(|after| after + 1).unwrap_or(0);
 ///             let mut end = before.unwrap_or(10000);
@@ -69,7 +71,7 @@ pub struct EmptyFields;
 /// async fn main() {
 ///     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
 ///
-///     assert_eq!(schema.execute("{ numbers(first: 2) { edges { node diff } } }").await.unwrap().data, serde_json::json!({
+///     assert_eq!(schema.execute("{ numbers(first: 2) { edges { node diff } } }").await.into_result().unwrap().data, value!({
 ///         "numbers": {
 ///             "edges": [
 ///                 {"node": 0, "diff": 10000},
@@ -78,7 +80,7 @@ pub struct EmptyFields;
 ///         },
 ///     }));
 ///
-///     assert_eq!(schema.execute("{ numbers(last: 2) { edges { node diff } } }").await.unwrap().data, serde_json::json!({
+///     assert_eq!(schema.execute("{ numbers(last: 2) { edges { node diff } } }").await.into_result().unwrap().data, value!({
 ///         "numbers": {
 ///             "edges": [
 ///                 {"node": 9998, "diff": 2},
@@ -94,12 +96,117 @@ pub async fn query<Cursor, Node, ConnectionFields, EdgeFields, F, R>(
     first: Option<i32>,
     last: Option<i32>,
     f: F,
-) -> FieldResult<Connection<Cursor, Node, ConnectionFields, EdgeFields>>
+) -> Result<Connection<Cursor, Node, ConnectionFields, EdgeFields>>
 where
     Cursor: CursorType + Send + Sync,
     <Cursor as CursorType>::Error: Display + Send + Sync + 'static,
     F: FnOnce(Option<Cursor>, Option<Cursor>, Option<usize>, Option<usize>) -> R,
-    R: Future<Output = FieldResult<Connection<Cursor, Node, ConnectionFields, EdgeFields>>>,
+    R: Future<Output = Result<Connection<Cursor, Node, ConnectionFields, EdgeFields>>>,
+{
+    query_with(after, before, first, last, f).await
+}
+
+/// Parses the parameters and executes the query and return a custom `Connection` type.
+///
+/// `Connection<T>` and `Edge<T>` have certain limitations. For example, you cannot customize
+/// the name of the type, so you can use this function to execute the query and return a customized `Connection` type.
+///
+/// # Examples
+///
+/// ```rust
+/// use async_graphql::*;
+/// use async_graphql::connection::*;
+///
+/// #[derive(SimpleObject)]
+/// struct MyEdge {
+///     cursor: usize,
+///     node: i32,
+///     diff: i32,
+/// }
+///
+/// #[derive(SimpleObject)]
+/// struct MyConnection {
+///     edges: Vec<MyEdge>,
+///     page_info: PageInfo,
+/// }
+///
+/// struct QueryRoot;
+///
+/// #[Object]
+/// impl QueryRoot {
+///     async fn numbers(&self,
+///         after: Option<String>,
+///         before: Option<String>,
+///         first: Option<i32>,
+///         last: Option<i32>
+///     ) -> Result<MyConnection> {
+///         query_with(after, before, first, last, |after, before, first, last| async move {
+///             let mut start = after.map(|after| after + 1).unwrap_or(0);
+///             let mut end = before.unwrap_or(10000);
+///             if let Some(first) = first {
+///                 end = (start + first).min(end);
+///             }
+///             if let Some(last) = last {
+///                 start = if last > end - start {
+///                     end
+///                 } else {
+///                     end - last
+///                 };
+///             }
+///             let connection = MyConnection {
+///                 edges: (start..end).into_iter().map(|n| MyEdge {
+///                     cursor: n,
+///                     node: n as i32,
+///                     diff: (10000 - n) as i32,
+///                 }).collect(),
+///                 page_info: PageInfo {
+///                     has_previous_page: start > 0,
+///                     has_next_page: end < 10000,
+///                     start_cursor: Some(start.encode_cursor()),
+///                     end_cursor: Some(end.encode_cursor()),
+///                 },
+///             };
+///             Ok(connection)
+///         }).await
+///     }
+/// }
+///
+/// #[async_std::main]
+/// async fn main() {
+///     let schema = Schema::new(QueryRoot, EmptyMutation, EmptySubscription);
+///
+///     assert_eq!(schema.execute("{ numbers(first: 2) { edges { node diff } } }").await.into_result().unwrap().data, value!({
+///         "numbers": {
+///             "edges": [
+///                 {"node": 0, "diff": 10000},
+///                 {"node": 1, "diff": 9999},
+///             ]
+///         },
+///     }));
+///
+///     assert_eq!(schema.execute("{ numbers(last: 2) { edges { node diff } } }").await.into_result().unwrap().data, value!({
+///         "numbers": {
+///             "edges": [
+///                 {"node": 9998, "diff": 2},
+///                 {"node": 9999, "diff": 1},
+///             ]
+///         },
+///     }));
+/// }
+///
+/// ```
+pub async fn query_with<Cursor, T, F, R>(
+    after: Option<String>,
+    before: Option<String>,
+    first: Option<i32>,
+    last: Option<i32>,
+    f: F,
+) -> Result<T>
+where
+    Cursor: CursorType + Send + Sync,
+    <Cursor as CursorType>::Error: Display + Send + Sync + 'static,
+    F: FnOnce(Option<Cursor>, Option<Cursor>, Option<usize>, Option<usize>) -> R,
+    R: Future<Output = Result<T>>,
 {
     if first.is_some() && last.is_some() {
         return Err("The \"first\" and \"last\" parameters cannot exist at the same time".into());

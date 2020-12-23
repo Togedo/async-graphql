@@ -1,23 +1,77 @@
 //! Extensions for schema
 
+mod analyzer;
+#[cfg(feature = "apollo_persisted_queries")]
+pub mod apollo_persisted_queries;
+#[cfg(feature = "apollo_tracing")]
 mod apollo_tracing;
+#[cfg(feature = "log")]
 mod logger;
+#[cfg(feature = "tracing")]
 mod tracing;
 
-use crate::context::{QueryPathNode, ResolveId};
-use crate::{Result, Variables};
+use std::any::{Any, TypeId};
+use std::collections::BTreeMap;
 
+use crate::context::{QueryPathNode, ResolveId};
+use crate::parser::types::ExecutableDocument;
+use crate::{Data, Request, Result, ServerError, ServerResult, ValidationResult, Variables};
+use crate::{Error, Name, Value};
+
+pub use self::analyzer::Analyzer;
+#[cfg(feature = "apollo_tracing")]
 pub use self::apollo_tracing::ApolloTracing;
+#[cfg(feature = "log")]
 pub use self::logger::Logger;
-pub use self::tracing::Tracing;
-use crate::Error;
-use async_graphql_parser::query::Document;
-use serde_json::Value;
+#[cfg(feature = "tracing")]
+pub use self::tracing::{Tracing, TracingConfig};
 
 pub(crate) type BoxExtension = Box<dyn Extension>;
 
-#[doc(hidden)]
-pub struct Extensions(pub(crate) Vec<BoxExtension>);
+/// Context for extension
+pub struct ExtensionContext<'a> {
+    #[doc(hidden)]
+    pub schema_data: &'a Data,
+
+    #[doc(hidden)]
+    pub query_data: &'a Data,
+}
+
+impl<'a> ExtensionContext<'a> {
+    /// Gets the global data defined in the `Context` or `Schema`.
+    ///
+    /// If both `Schema` and `Query` have the same data type, the data in the `Query` is obtained.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `Error` if the specified type data does not exist.
+    pub fn data<D: Any + Send + Sync>(&self) -> Result<&D> {
+        self.data_opt::<D>().ok_or_else(|| {
+            Error::new(format!(
+                "Data `{}` does not exist.",
+                std::any::type_name::<D>()
+            ))
+        })
+    }
+
+    /// Gets the global data defined in the `Context` or `Schema`.
+    ///
+    /// # Panics
+    ///
+    /// It will panic if the specified data type does not exist.
+    pub fn data_unchecked<D: Any + Send + Sync>(&self) -> &D {
+        self.data_opt::<D>()
+            .unwrap_or_else(|| panic!("Data `{}` does not exist.", std::any::type_name::<D>()))
+    }
+
+    /// Gets the global data defined in the `Context` or `Schema` or `None` if the specified type data does not exist.
+    pub fn data_opt<D: Any + Send + Sync>(&self) -> Option<&D> {
+        self.query_data
+            .get(&TypeId::of::<D>())
+            .or_else(|| self.schema_data.get(&TypeId::of::<D>()))
+            .and_then(|d| d.downcast_ref::<D>())
+    }
+}
 
 /// Parameters for `Extension::resolve_field_start`
 pub struct ResolveInfo<'a> {
@@ -36,6 +90,7 @@ pub struct ResolveInfo<'a> {
 }
 
 /// Represents a GraphQL extension
+#[async_trait::async_trait]
 #[allow(unused_variables)]
 pub trait Extension: Sync + Send + 'static {
     /// If this extension needs to output data to query results, you need to specify a name.
@@ -43,108 +98,203 @@ pub trait Extension: Sync + Send + 'static {
         None
     }
 
+    /// Called at the prepare request
+    async fn prepare_request(
+        &mut self,
+        ctx: &ExtensionContext<'_>,
+        request: Request,
+    ) -> ServerResult<Request> {
+        Ok(request)
+    }
+
     /// Called at the begin of the parse.
-    fn parse_start(&mut self, query_source: &str, variables: &Variables) {}
+    fn parse_start(
+        &mut self,
+        ctx: &ExtensionContext<'_>,
+        query_source: &str,
+        variables: &Variables,
+    ) {
+    }
 
     /// Called at the end of the parse.
-    fn parse_end(&mut self, document: &Document) {}
+    fn parse_end(&mut self, ctx: &ExtensionContext<'_>, document: &ExecutableDocument) {}
 
     /// Called at the begin of the validation.
-    fn validation_start(&mut self) {}
+    fn validation_start(&mut self, ctx: &ExtensionContext<'_>) {}
 
     /// Called at the end of the validation.
-    fn validation_end(&mut self) {}
+    fn validation_end(&mut self, ctx: &ExtensionContext<'_>, result: &ValidationResult) {}
 
     /// Called at the begin of the execution.
-    fn execution_start(&mut self) {}
+    fn execution_start(&mut self, ctx: &ExtensionContext<'_>) {}
 
     /// Called at the end of the execution.
-    fn execution_end(&mut self) {}
+    fn execution_end(&mut self, ctx: &ExtensionContext<'_>) {}
 
     /// Called at the begin of the resolve field.
-    fn resolve_start(&mut self, info: &ResolveInfo<'_>) {}
+    fn resolve_start(&mut self, ctx: &ExtensionContext<'_>, info: &ResolveInfo<'_>) {}
 
     /// Called at the end of the resolve field.
-    fn resolve_end(&mut self, info: &ResolveInfo<'_>) {}
+    fn resolve_end(&mut self, ctx: &ExtensionContext<'_>, info: &ResolveInfo<'_>) {}
 
     /// Called when an error occurs.
-    fn error(&mut self, err: &Error) {}
+    fn error(&mut self, ctx: &ExtensionContext<'_>, err: &ServerError) {}
 
     /// Get the results
-    fn result(&mut self) -> Option<serde_json::Value> {
+    fn result(&mut self, ctx: &ExtensionContext<'_>) -> Option<Value> {
         None
     }
 }
 
 pub(crate) trait ErrorLogger {
-    fn log_error(self, extensions: &spin::Mutex<Extensions>) -> Self;
+    fn log_error(self, ctx: &ExtensionContext<'_>, extensions: &Extensions) -> Self;
 }
 
-impl<T> ErrorLogger for Result<T> {
-    fn log_error(self, extensions: &spin::Mutex<Extensions>) -> Self {
+impl<T> ErrorLogger for ServerResult<T> {
+    fn log_error(self, ctx: &ExtensionContext<'_>, extensions: &Extensions) -> Self {
         if let Err(err) = &self {
-            extensions.lock().error(err);
+            extensions.error(ctx, err);
         }
         self
     }
 }
 
-impl Extension for Extensions {
-    fn parse_start(&mut self, query_source: &str, variables: &Variables) {
-        self.0
-            .iter_mut()
-            .for_each(|e| e.parse_start(query_source, variables));
+impl<T> ErrorLogger for Result<T, Vec<ServerError>> {
+    fn log_error(self, ctx: &ExtensionContext<'_>, extensions: &Extensions) -> Self {
+        if let Err(errors) = &self {
+            for error in errors {
+                extensions.error(ctx, error);
+            }
+        }
+        self
+    }
+}
+
+/// Extension factory
+///
+/// Used to create an extension instance.
+pub trait ExtensionFactory: Send + Sync + 'static {
+    /// Create an extended instance.
+    fn create(&self) -> Box<dyn Extension>;
+}
+
+#[doc(hidden)]
+pub struct Extensions(Option<spin::Mutex<Vec<BoxExtension>>>);
+
+impl From<Vec<BoxExtension>> for Extensions {
+    fn from(extensions: Vec<BoxExtension>) -> Self {
+        Self(if extensions.is_empty() {
+            None
+        } else {
+            Some(spin::Mutex::new(extensions))
+        })
+    }
+}
+
+#[doc(hidden)]
+impl Extensions {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_none()
     }
 
-    fn parse_end(&mut self, document: &Document) {
-        self.0.iter_mut().for_each(|e| e.parse_end(document));
+    pub async fn prepare_request(
+        &mut self,
+        ctx: &ExtensionContext<'_>,
+        request: Request,
+    ) -> ServerResult<Request> {
+        let mut request = request;
+        if let Some(e) = &mut self.0 {
+            for e in e.get_mut().iter_mut() {
+                request = e.prepare_request(ctx, request).await?;
+            }
+        }
+        Ok(request)
     }
 
-    fn validation_start(&mut self) {
-        self.0.iter_mut().for_each(|e| e.validation_start());
+    pub fn parse_start(
+        &mut self,
+        ctx: &ExtensionContext<'_>,
+        query_source: &str,
+        variables: &Variables,
+    ) {
+        if let Some(e) = &mut self.0 {
+            e.get_mut()
+                .iter_mut()
+                .for_each(|e| e.parse_start(ctx, query_source, variables));
+        }
     }
 
-    fn validation_end(&mut self) {
-        self.0.iter_mut().for_each(|e| e.validation_end());
+    pub fn parse_end(&mut self, ctx: &ExtensionContext<'_>, document: &ExecutableDocument) {
+        if let Some(e) = &mut self.0 {
+            e.get_mut()
+                .iter_mut()
+                .for_each(|e| e.parse_end(ctx, document));
+        }
     }
 
-    fn execution_start(&mut self) {
-        self.0.iter_mut().for_each(|e| e.execution_start());
+    pub fn validation_start(&mut self, ctx: &ExtensionContext<'_>) {
+        if let Some(e) = &mut self.0 {
+            e.get_mut().iter_mut().for_each(|e| e.validation_start(ctx));
+        }
     }
 
-    fn execution_end(&mut self) {
-        self.0.iter_mut().for_each(|e| e.execution_end());
+    pub fn validation_end(&mut self, ctx: &ExtensionContext<'_>, result: &ValidationResult) {
+        if let Some(e) = &mut self.0 {
+            e.get_mut()
+                .iter_mut()
+                .for_each(|e| e.validation_end(ctx, result));
+        }
     }
 
-    fn resolve_start(&mut self, info: &ResolveInfo<'_>) {
-        self.0.iter_mut().for_each(|e| e.resolve_start(info));
+    pub fn execution_start(&self, ctx: &ExtensionContext<'_>) {
+        if let Some(e) = &self.0 {
+            e.lock().iter_mut().for_each(|e| e.execution_start(ctx));
+        }
     }
 
-    fn resolve_end(&mut self, resolve_id: &ResolveInfo<'_>) {
-        self.0.iter_mut().for_each(|e| e.resolve_end(resolve_id));
+    pub fn execution_end(&self, ctx: &ExtensionContext<'_>) {
+        if let Some(e) = &self.0 {
+            e.lock().iter_mut().for_each(|e| e.execution_end(ctx));
+        }
     }
 
-    fn error(&mut self, err: &Error) {
-        self.0.iter_mut().for_each(|e| e.error(err));
+    pub fn resolve_start(&self, ctx: &ExtensionContext<'_>, info: &ResolveInfo<'_>) {
+        if let Some(e) = &self.0 {
+            e.lock().iter_mut().for_each(|e| e.resolve_start(ctx, info));
+        }
     }
 
-    fn result(&mut self) -> Option<Value> {
-        if !self.0.is_empty() {
-            let value = self
-                .0
+    pub fn resolve_end(&self, ctx: &ExtensionContext<'_>, resolve_id: &ResolveInfo<'_>) {
+        if let Some(e) = &self.0 {
+            e.lock()
+                .iter_mut()
+                .for_each(|e| e.resolve_end(ctx, resolve_id));
+        }
+    }
+
+    pub fn error(&self, ctx: &ExtensionContext<'_>, err: &ServerError) {
+        if let Some(e) = &self.0 {
+            e.lock().iter_mut().for_each(|e| e.error(ctx, err));
+        }
+    }
+
+    pub fn result(&self, ctx: &ExtensionContext<'_>) -> Option<Value> {
+        if let Some(e) = &self.0 {
+            let value = e
+                .lock()
                 .iter_mut()
                 .filter_map(|e| {
                     if let Some(name) = e.name() {
-                        e.result().map(|res| (name.to_string(), res))
+                        e.result(ctx).map(|res| (Name::new(name), res))
                     } else {
                         None
                     }
                 })
-                .collect::<serde_json::Map<_, _>>();
+                .collect::<BTreeMap<_, _>>();
             if value.is_empty() {
                 None
             } else {
-                Some(value.into())
+                Some(Value::Object(value))
             }
         } else {
             None

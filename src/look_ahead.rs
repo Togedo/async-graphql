@@ -1,22 +1,36 @@
-use async_graphql_parser::query::{Document, Field, Selection, SelectionSet};
+use std::collections::HashMap;
 
-/// A selection performed by a query
-#[derive(Debug)]
+use crate::parser::types::{Field, FragmentDefinition, Selection, SelectionSet};
+use crate::{Name, Positioned};
+
+/// A selection performed by a query.
 pub struct Lookahead<'a> {
-    /// Query document
-    pub document: &'a Document,
-    /// Current field
+    pub fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
     pub field: Option<&'a Field>,
 }
 
 impl<'a> Lookahead<'a> {
-    /// Check if the specified field exists in the current selection.
-    pub fn field(&self, name: &str) -> Lookahead {
-        Lookahead {
-            document: self.document,
+    pub(crate) fn new(
+        fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
+        field: &'a Field,
+    ) -> Self {
+        Self {
+            fragments,
+            field: Some(field),
+        }
+    }
+
+    /// Get the first subfield of the selection set with the specified name. This will ignore
+    /// aliases.
+    ///
+    /// For example, calling `.field("a")` on `{ a { b } }` will return a lookahead that
+    /// represents `{ b }`.
+    pub fn field(&self, name: &str) -> Self {
+        Self {
+            fragments: self.fragments,
             field: self
                 .field
-                .and_then(|field| find(self.document, &field.selection_set.node, name)),
+                .and_then(|field| find(self.fragments, &field.selection_set.node, name)),
         }
     }
 
@@ -28,35 +42,28 @@ impl<'a> Lookahead<'a> {
 }
 
 fn find<'a>(
-    document: &'a Document,
+    fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
     selection_set: &'a SelectionSet,
     name: &str,
 ) -> Option<&'a Field> {
-    for item in &selection_set.items {
-        match &item.node {
+    selection_set
+        .items
+        .iter()
+        .find_map(|item| match &item.node {
             Selection::Field(field) => {
-                if field.name.node == name {
-                    return Some(&field.node);
+                if field.node.name.node == name {
+                    Some(&field.node)
+                } else {
+                    None
                 }
             }
-            Selection::InlineFragment(inline_fragment) => {
-                if let Some(field) = find(document, &inline_fragment.selection_set.node, name) {
-                    return Some(field);
-                }
+            Selection::InlineFragment(fragment) => {
+                find(fragments, &fragment.node.selection_set.node, name)
             }
-            Selection::FragmentSpread(fragment_spread) => {
-                if let Some(fragment) = document
-                    .fragments()
-                    .get(fragment_spread.fragment_name.as_str())
-                {
-                    if let Some(field) = find(document, &fragment.selection_set.node, name) {
-                        return Some(field);
-                    }
-                }
-            }
-        }
-    }
-    None
+            Selection::FragmentSpread(spread) => fragments
+                .get(&spread.node.fragment_name.node)
+                .and_then(|fragment| find(fragments, &fragment.node.selection_set.node, name)),
+        })
 }
 
 #[cfg(test)]
@@ -65,13 +72,15 @@ mod tests {
 
     #[async_std::test]
     async fn test_look_ahead() {
-        #[SimpleObject(internal)]
+        #[derive(SimpleObject)]
+        #[graphql(internal)]
         struct Detail {
             c: i32,
             d: i32,
         }
 
-        #[SimpleObject(internal)]
+        #[derive(SimpleObject)]
+        #[graphql(internal)]
         struct MyObj {
             a: i32,
             b: i32,
@@ -103,7 +112,7 @@ mod tests {
 
         let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
 
-        schema
+        assert!(schema
             .execute(
                 r#"{
             obj(n: 1) {
@@ -112,9 +121,9 @@ mod tests {
         }"#,
             )
             .await
-            .unwrap();
+            .is_ok());
 
-        schema
+        assert!(schema
             .execute(
                 r#"{
             obj(n: 1) {
@@ -123,9 +132,9 @@ mod tests {
         }"#,
             )
             .await
-            .unwrap();
+            .is_ok());
 
-        schema
+        assert!(schema
             .execute(
                 r#"{
             obj(n: 2) {
@@ -136,9 +145,9 @@ mod tests {
         }"#,
             )
             .await
-            .unwrap();
+            .is_ok());
 
-        schema
+        assert!(schema
             .execute(
                 r#"{
             obj(n: 3) {
@@ -147,9 +156,9 @@ mod tests {
         }"#,
             )
             .await
-            .unwrap();
+            .is_ok());
 
-        schema
+        assert!(schema
             .execute(
                 r#"{
             obj(n: 1) {
@@ -160,9 +169,9 @@ mod tests {
         }"#,
             )
             .await
-            .unwrap();
+            .is_ok());
 
-        schema
+        assert!(schema
             .execute(
                 r#"{
             obj(n: 2) {
@@ -175,9 +184,9 @@ mod tests {
         }"#,
             )
             .await
-            .unwrap();
+            .is_ok());
 
-        schema
+        assert!(schema
             .execute(
                 r#"{
             obj(n: 1) {
@@ -190,9 +199,9 @@ mod tests {
         }"#,
             )
             .await
-            .unwrap();
+            .is_ok());
 
-        schema
+        assert!(schema
             .execute(
                 r#"{
             obj(n: 2) {
@@ -207,6 +216,6 @@ mod tests {
         }"#,
             )
             .await
-            .unwrap();
+            .is_ok());
     }
 }

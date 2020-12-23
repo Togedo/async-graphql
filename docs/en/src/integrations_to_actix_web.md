@@ -1,8 +1,10 @@
 # Actix-web
 
-`Async-graphql-actix-web` provides an implementation of `actix_web::FromRequest` for `GQLRequest`. This is actually an abstraction around `QueryBuilder` and you can call `GQLRequest::into_inner` to convert it into a `QueryBuilder`。
+`Async-graphql-actix-web` provides an implementation of `actix_web::FromRequest` for `Request`.
+This is actually an abstraction around `async_graphql::Request` and you can call `Request::into_inner` to 
+convert it into a `async_graphql::Request`.
 
-`WSSubscription` is an Actor that supports WebSocket subscriptions。
+`WSSubscription` is an Actor that supports WebSocket subscriptions.
 
 ## Request example
 
@@ -12,9 +14,9 @@ When you define your `actix_web::App` you need to pass in the Schema as data.
 async fn index(
     // Schema now accessible here
     schema: web::Data<Schema>,
-    gql_request: GQLRequest,
-) -> web::Json<GQLResponse> {
-    web::Json(GQLResponse(gql_request.into_inner().execute(&schema).await))
+    request: async_graphql_actix_web::Request,
+) -> web::Json<Response> {
+    web::Json(Response(schema.execute(request.into_inner()).await)
 }
 
 ```
@@ -27,6 +29,10 @@ async fn index_ws(
     req: HttpRequest,
     payload: web::Payload,
 ) -> Result<HttpResponse> {
-    ws::start_with_protocols(WSSubscription::new(&schema), &["graphql-ws"], &req, payload)
+    WSSubscription::start(Schema::clone(&*schema), &req, payload)
 }
 ```
+
+## More examples
+
+[https://github.com/async-graphql/examples/tree/master/actix-web](https://github.com/async-graphql/examples/tree/master/actix-web)

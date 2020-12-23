@@ -2,13 +2,13 @@ use async_graphql::*;
 
 #[async_std::test]
 pub async fn test_union_simple_object() {
-    #[async_graphql::SimpleObject]
+    #[derive(SimpleObject)]
     struct MyObj {
         id: i32,
         title: String,
     }
 
-    #[async_graphql::Union]
+    #[derive(Union)]
     enum Node {
         MyObj(MyObj),
     }
@@ -35,8 +35,8 @@ pub async fn test_union_simple_object() {
         }"#;
     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
             "node": {
                 "id": 33,
             }
@@ -46,13 +46,13 @@ pub async fn test_union_simple_object() {
 
 #[async_std::test]
 pub async fn test_union_simple_object2() {
-    #[async_graphql::SimpleObject]
+    #[derive(SimpleObject)]
     struct MyObj {
         id: i32,
         title: String,
     }
 
-    #[async_graphql::Union]
+    #[derive(Union)]
     enum Node {
         MyObj(MyObj),
     }
@@ -79,8 +79,8 @@ pub async fn test_union_simple_object2() {
         }"#;
     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
             "node": {
                 "id": 33,
             }
@@ -92,7 +92,7 @@ pub async fn test_union_simple_object2() {
 pub async fn test_multiple_unions() {
     struct MyObj;
 
-    #[async_graphql::Object]
+    #[Object]
     impl MyObj {
         async fn value_a(&self) -> i32 {
             1
@@ -107,12 +107,12 @@ pub async fn test_multiple_unions() {
         }
     }
 
-    #[async_graphql::Union]
+    #[derive(Union)]
     enum UnionA {
         MyObj(MyObj),
     }
 
-    #[async_graphql::Union]
+    #[derive(Union)]
     enum UnionB {
         MyObj(MyObj),
     }
@@ -149,8 +149,8 @@ pub async fn test_multiple_unions() {
              }
         }"#;
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
             "unionA": {
                 "valueA": 1,
                 "valueB": 2,
@@ -169,7 +169,7 @@ pub async fn test_multiple_unions() {
 pub async fn test_multiple_objects_in_multiple_unions() {
     struct MyObjOne;
 
-    #[async_graphql::Object]
+    #[Object]
     impl MyObjOne {
         async fn value_a(&self) -> i32 {
             1
@@ -186,20 +186,20 @@ pub async fn test_multiple_objects_in_multiple_unions() {
 
     struct MyObjTwo;
 
-    #[async_graphql::Object]
+    #[Object]
     impl MyObjTwo {
         async fn value_a(&self) -> i32 {
             1
         }
     }
 
-    #[async_graphql::Union]
+    #[derive(Union)]
     enum UnionA {
         MyObjOne(MyObjOne),
         MyObjTwo(MyObjTwo),
     }
 
-    #[async_graphql::Union]
+    #[derive(Union)]
     enum UnionB {
         MyObjOne(MyObjOne),
     }
@@ -229,8 +229,8 @@ pub async fn test_multiple_objects_in_multiple_unions() {
             }
          }"#;
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
             "myObj": [{
                 "valueA": 1,
                 "valueB": 2,
@@ -246,14 +246,14 @@ pub async fn test_multiple_objects_in_multiple_unions() {
 pub async fn test_union_field_result() {
     struct MyObj;
 
-    #[async_graphql::Object]
+    #[Object]
     impl MyObj {
-        async fn value(&self) -> FieldResult<i32> {
+        async fn value(&self) -> Result<i32> {
             Ok(10)
         }
     }
 
-    #[async_graphql::Union]
+    #[derive(Union)]
     enum Node {
         MyObj(MyObj),
     }
@@ -276,10 +276,93 @@ pub async fn test_union_field_result() {
         }"#;
     let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
             "node": {
                 "value": 10,
+            }
+        })
+    );
+}
+
+#[async_std::test]
+pub async fn test_union_flatten() {
+    #[derive(SimpleObject)]
+    struct MyObj1 {
+        value1: i32,
+    }
+
+    #[derive(SimpleObject)]
+    struct MyObj2 {
+        value2: i32,
+    }
+
+    #[derive(Union)]
+    enum InnerUnion1 {
+        A(MyObj1),
+    }
+
+    #[derive(Union)]
+    enum InnerUnion2 {
+        B(MyObj2),
+    }
+
+    #[derive(Union)]
+    enum MyUnion {
+        #[graphql(flatten)]
+        Inner1(InnerUnion1),
+
+        #[graphql(flatten)]
+        Inner2(InnerUnion2),
+    }
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn value1(&self) -> MyUnion {
+            InnerUnion1::A(MyObj1 { value1: 99 }).into()
+        }
+
+        async fn value2(&self) -> MyUnion {
+            InnerUnion2::B(MyObj2 { value2: 88 }).into()
+        }
+
+        async fn value3(&self) -> InnerUnion1 {
+            InnerUnion1::A(MyObj1 { value1: 77 })
+        }
+    }
+
+    let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
+    let query = r#"
+    {
+        value1 {
+            ... on MyObj1 {
+                value1
+            }
+        }
+        value2 {
+            ... on MyObj2 {
+                value2
+            }
+        }
+        value3 {
+            ... on MyObj1 {
+                value1
+            }
+        }
+    }"#;
+    assert_eq!(
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
+            "value1": {
+                "value1": 99,
+            },
+            "value2": {
+                "value2": 88,
+            },
+            "value3": {
+                "value1": 77,
             }
         })
     );

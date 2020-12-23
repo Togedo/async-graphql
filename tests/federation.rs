@@ -8,7 +8,7 @@ struct User {
 
 #[Object(extends)]
 impl User {
-    #[field(external)]
+    #[graphql(external)]
     async fn id(&self) -> &ID {
         &self.id
     }
@@ -26,7 +26,7 @@ impl Review {
         todo!()
     }
 
-    #[field(provides = "username")]
+    #[graphql(provides = "username")]
     async fn author(&self) -> User {
         todo!()
     }
@@ -42,7 +42,7 @@ struct Product {
 
 #[Object(extends)]
 impl Product {
-    #[field(external)]
+    #[graphql(external)]
     async fn upc(&self) -> &str {
         &self.upc
     }
@@ -56,12 +56,12 @@ struct QueryRoot;
 
 #[Object]
 impl QueryRoot {
-    #[entity]
+    #[graphql(entity)]
     async fn find_user_by_id(&self, id: ID) -> User {
         User { id }
     }
 
-    #[entity]
+    #[graphql(entity)]
     async fn find_product_by_upc(&self, upc: String) -> Product {
         Product { upc }
     }
@@ -79,8 +79,8 @@ pub async fn test_federation() {
             }
         }"#;
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
             "_entities": [
                 {"__typename": "Product", "upc": "B00005N5PF"},
             ]

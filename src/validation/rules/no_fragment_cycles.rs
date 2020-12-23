@@ -1,8 +1,8 @@
-use crate::error::RuleError;
-use crate::parser::query::{Document, FragmentDefinition, FragmentSpread};
-use crate::validation::visitor::{Visitor, VisitorContext};
-use crate::{Pos, Positioned};
 use std::collections::{HashMap, HashSet};
+
+use crate::parser::types::{ExecutableDocument, FragmentDefinition, FragmentSpread};
+use crate::validation::visitor::{RuleError, Visitor, VisitorContext};
+use crate::{Name, Pos, Positioned};
 
 struct CycleDetector<'a> {
     visited: HashSet<&'a str>,
@@ -54,7 +54,7 @@ pub struct NoFragmentCycles<'a> {
 }
 
 impl<'a> Visitor<'a> for NoFragmentCycles<'a> {
-    fn exit_document(&mut self, ctx: &mut VisitorContext<'a>, _doc: &'a Document) {
+    fn exit_document(&mut self, ctx: &mut VisitorContext<'a>, _doc: &'a ExecutableDocument) {
         let mut detector = CycleDetector {
             visited: HashSet::new(),
             spreads: &self.spreads,
@@ -75,15 +75,17 @@ impl<'a> Visitor<'a> for NoFragmentCycles<'a> {
     fn enter_fragment_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
-        fragment_definition: &'a Positioned<FragmentDefinition>,
+        name: &'a Name,
+        _fragment_definition: &'a Positioned<FragmentDefinition>,
     ) {
-        self.current_fragment = Some(&fragment_definition.name);
-        self.fragment_order.push(&fragment_definition.name);
+        self.current_fragment = Some(name);
+        self.fragment_order.push(name);
     }
 
     fn exit_fragment_definition(
         &mut self,
         _ctx: &mut VisitorContext<'a>,
+        _name: &'a Name,
         _fragment_definition: &'a Positioned<FragmentDefinition>,
     ) {
         self.current_fragment = None;
@@ -98,7 +100,10 @@ impl<'a> Visitor<'a> for NoFragmentCycles<'a> {
             self.spreads
                 .entry(current_fragment)
                 .or_insert_with(Vec::new)
-                .push((&fragment_spread.fragment_name, fragment_spread.position()));
+                .push((
+                    &fragment_spread.node.fragment_name.node,
+                    fragment_spread.pos,
+                ));
         }
     }
 }
@@ -106,7 +111,6 @@ impl<'a> Visitor<'a> for NoFragmentCycles<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{expect_fails_rule, expect_passes_rule};
 
     pub fn factory<'a>() -> NoFragmentCycles<'a> {
         NoFragmentCycles::default()
@@ -119,6 +123,7 @@ mod tests {
             r#"
           fragment fragA on Dog { ...fragB }
           fragment fragB on Dog { name }
+          { __typename }
         "#,
         );
     }
@@ -130,6 +135,7 @@ mod tests {
             r#"
           fragment fragA on Dog { ...fragB, ...fragB }
           fragment fragB on Dog { name }
+          { __typename }
         "#,
         );
     }
@@ -142,6 +148,7 @@ mod tests {
           fragment fragA on Dog { ...fragB, ...fragC }
           fragment fragB on Dog { ...fragC }
           fragment fragC on Dog { name }
+          { __typename }
         "#,
         );
     }
@@ -159,6 +166,7 @@ mod tests {
             ... on Dog { ...nameFragment }
             ... on Cat { ...nameFragment }
           }
+          { __typename }
         "#,
         );
     }
@@ -171,6 +179,7 @@ mod tests {
           fragment nameFragment on Pet {
             ...UnknownFragment
           }
+          { __typename }
         "#,
         );
     }
@@ -181,6 +190,7 @@ mod tests {
             factory,
             r#"
           fragment fragA on Human { relatives { ...fragA } },
+          { __typename }
         "#,
         );
     }
@@ -191,6 +201,7 @@ mod tests {
             factory,
             r#"
           fragment fragA on Dog { ...fragA }
+          { __typename }
         "#,
         );
     }
@@ -205,6 +216,7 @@ mod tests {
               ...fragA
             }
           }
+          { __typename }
         "#,
         );
     }
@@ -216,6 +228,7 @@ mod tests {
             r#"
           fragment fragA on Dog { ...fragB }
           fragment fragB on Dog { ...fragA }
+          { __typename }
         "#,
         );
     }
@@ -227,6 +240,7 @@ mod tests {
             r#"
           fragment fragB on Dog { ...fragA }
           fragment fragA on Dog { ...fragB }
+          { __typename }
         "#,
         );
     }
@@ -246,6 +260,7 @@ mod tests {
               ...fragA
             }
           }
+          { __typename }
         "#,
         );
     }
@@ -263,6 +278,7 @@ mod tests {
           fragment fragZ on Dog { ...fragO }
           fragment fragO on Dog { ...fragP }
           fragment fragP on Dog { ...fragA, ...fragX }
+          { __typename }
         "#,
         );
     }
@@ -275,6 +291,7 @@ mod tests {
           fragment fragA on Dog { ...fragB, ...fragC }
           fragment fragB on Dog { ...fragA }
           fragment fragC on Dog { ...fragA }
+          { __typename }
         "#,
         );
     }
@@ -287,6 +304,7 @@ mod tests {
           fragment fragA on Dog { ...fragC }
           fragment fragB on Dog { ...fragC }
           fragment fragC on Dog { ...fragA, ...fragB }
+          { __typename }
         "#,
         );
     }
@@ -299,6 +317,7 @@ mod tests {
           fragment fragA on Dog { ...fragB }
           fragment fragB on Dog { ...fragB, ...fragC }
           fragment fragC on Dog { ...fragA, ...fragB }
+          { __typename }
         "#,
         );
     }

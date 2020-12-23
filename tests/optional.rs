@@ -2,7 +2,7 @@ use async_graphql::*;
 
 #[async_std::test]
 pub async fn test_optional_type() {
-    #[InputObject]
+    #[derive(InputObject)]
     struct MyInput {
         value: Option<i32>,
     }
@@ -15,7 +15,7 @@ pub async fn test_optional_type() {
     #[Object]
     impl Root {
         async fn value1(&self) -> Option<i32> {
-            self.value1.clone()
+            self.value1
         }
 
         async fn value1_ref(&self) -> &Option<i32> {
@@ -23,7 +23,7 @@ pub async fn test_optional_type() {
         }
 
         async fn value2(&self) -> Option<i32> {
-            self.value2.clone()
+            self.value2
         }
 
         async fn value2_ref(&self) -> &Option<i32> {
@@ -34,8 +34,12 @@ pub async fn test_optional_type() {
             input
         }
 
+        async fn test_arg2(&self, input: Option<Vec<i32>>) -> Option<Vec<i32>> {
+            input
+        }
+
         async fn test_input<'a>(&self, input: MyInput) -> Option<i32> {
-            input.value.clone()
+            input.value
         }
     }
 
@@ -47,27 +51,32 @@ pub async fn test_optional_type() {
         EmptyMutation,
         EmptySubscription,
     );
-    let query = format!(
-        r#"{{
+    let query = r#"{
             value1
             value1Ref
             value2
             value2Ref
             testArg1: testArg(input: 10)
             testArg2: testArg
-            testInput1: testInput(input: {{value: 10}})
-            testInput2: testInput(input: {{}})
-            }}"#
-    );
+            testArg3: testArg(input: null)
+            testArg21: testArg2(input: null)
+            testArg22: testArg2(input: [1, 2, 3])
+            testInput1: testInput(input: {value: 10})
+            testInput2: testInput(input: {})
+            }"#
+    .to_owned();
     assert_eq!(
-        schema.execute(&query).await.unwrap().data,
-        serde_json::json!({
+        schema.execute(&query).await.into_result().unwrap().data,
+        value!({
             "value1": 10,
             "value1Ref": 10,
             "value2": null,
             "value2Ref": null,
             "testArg1": 10,
             "testArg2": null,
+            "testArg3": null,
+            "testArg21": null,
+            "testArg22": [1, 2, 3],
             "testInput1": 10,
             "testInput2": null,
         })

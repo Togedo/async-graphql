@@ -1,6 +1,6 @@
 # Context
 
-The main goal of `Context` is to acquire global data attached to Schema. **Note that if the return value of resolver function is borrowed from `Context`, you need to explicitly state the lifetime of the argument.**
+The main goal of `Context` is to acquire global data attached to Schema. **Note that if the return value of resolver function is borrowed from `Context`, you will need to explicitly state the lifetime of the argument.**
 
 The following example shows how to borrow data in `Context`.
 
@@ -14,7 +14,7 @@ impl Query {
     async fn borrow_from_context_data<'ctx>(
         &self,
         ctx: &'ctx Context<'_>
-    ) -> FieldResult<&'ctx String> {
+    ) -> Result<&'ctx String> {
         ctx.data::<String>()
     }
 }

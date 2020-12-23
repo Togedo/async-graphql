@@ -1,34 +1,36 @@
 use async_graphql::*;
-use futures::{Stream, StreamExt};
+use futures_util::stream::{Stream, StreamExt, TryStreamExt};
 
 #[async_std::test]
 pub async fn test_input_value_custom_error() {
-    #[Enum]
+    #[derive(Enum, Copy, Clone, Eq, PartialEq)]
     #[allow(non_camel_case_types)]
     enum MyEnum {
         r#type,
     }
 
-    #[SimpleObject]
+    #[derive(SimpleObject)]
     struct MyObject {
-        r#i32: i32,
+        r#match: i32,
     }
 
-    #[InputObject]
+    #[derive(InputObject)]
     struct MyInputObject {
-        r#i32: i32,
+        r#match: i32,
     }
 
     struct Query;
 
     #[Object]
     impl Query {
-        async fn r#type(&self, r#i32: i32) -> i32 {
-            r#i32
+        async fn r#type(&self, r#match: i32) -> i32 {
+            r#match
         }
 
         async fn obj(&self, obj: MyInputObject) -> MyObject {
-            MyObject { r#i32: obj.r#i32 }
+            MyObject {
+                r#match: obj.r#match,
+            }
         }
 
         async fn enum_value(&self, value: MyEnum) -> MyEnum {
@@ -41,39 +43,33 @@ pub async fn test_input_value_custom_error() {
     #[Subscription]
     impl SubscriptionRoot {
         async fn r#type(&self) -> impl Stream<Item = i32> {
-            futures::stream::iter(0..10)
+            futures_util::stream::iter(0..10)
         }
     }
 
     let schema = Schema::new(Query, EmptyMutation, SubscriptionRoot);
     let query = r#"
         {
-            type(i32: 99)
-            obj(obj: { i32: 88} ) { i32 }
+            type(match: 99)
+            obj(obj: { match: 88} ) { match }
             enumValue(value: TYPE)
         }"#;
     assert_eq!(
-        QueryBuilder::new(query)
-            .execute(&schema)
-            .await
-            .unwrap()
-            .data,
-        serde_json::json!({
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
             "type": 99,
-            "obj": { "i32": 88 },
+            "obj": { "match": 88 },
             "enumValue": "TYPE",
         })
     );
 
     let mut stream = schema
-        .create_subscription_stream("subscription { type }", None, Default::default(), None)
-        .await
-        .unwrap();
+        .execute_stream("subscription { type }")
+        .map(|resp| resp.into_result())
+        .map_ok(|resp| resp.data)
+        .boxed();
     for i in 0..10 {
-        assert_eq!(
-            Some(Ok(serde_json::json!({ "type": i }))),
-            stream.next().await
-        );
+        assert_eq!(value!({ "type": i }), stream.next().await.unwrap().unwrap());
     }
     assert!(stream.next().await.is_none());
 }

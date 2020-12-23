@@ -1,0 +1,22 @@
+[package]
+name = "async-graphql-warp"
+version = "2.4.3"
+authors = ["sunli <scott_s829@163.com>", "Koxiaet"]
+edition = "2018"
+description = "async-graphql for warp"
+license = "MIT/Apache-2.0"
+documentation = "https://docs.rs/async-graphql-warp/"
+homepage = "https://github.com/async-graphql/async-graphql"
+repository = "https://github.com/async-graphql/async-graphql"
+keywords = ["futures", "async", "graphql"]
+categories = ["network-programming", "asynchronous"]
+
+[dependencies]
+async-graphql = { path = "../..", version = "=2.4.3" }
+
+warp = { version = "0.2.5", default-features = false, features = ["websocket"] }
+futures-util = { version = "0.3.8", default-features = false }
+serde_json = "1.0.59"
+
+[dev-dependencies]
+tokio = { version = "0.2.0", default-features = false, features = ["macros", "rt-threaded", "time", "stream"] }

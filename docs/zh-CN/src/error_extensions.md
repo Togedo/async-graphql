@@ -11,17 +11,15 @@
 
 ## 一般概念
 
-在`Async-graphql`中，所有面向用户的错误都强制转换为`FieldError`类型，默认情况下会提供
-由`std:::fmt::Display`暴露的错误消息。但是，`FieldError`实际上提供了一个额外的
-字段`Option<serde_json::Value>`，如果它是一个`serde_json::Map`，则可以扩展错误的信息。
+在`Async-graphql`中，所有面向用户的错误都强制转换为`Error`类型，默认情况下会提供
+由`std:::fmt::Display`暴露的错误消息。但是，`Error`实际上提供了一个额外的可以扩展错误的信息。
 
 Resolver函数类似这样：
 
 ```rust
-async fn parse_with_extensions(&self) -> Result<i32, FieldError> {
-    let my_extension = json!({ "details": "CAN_NOT_FETCH" });
-    Err(FieldError("MyMessage", Some(my_extension)))
- }
+async fn parse_with_extensions(&self) -> Result<i32, Error> {
+    Err(Error::new("MyMessage").extend_with(|_, e| e.set("details", "CAN_NOT_FETCH")))
+}
 ```
 
 然后可以返回如下响应：
@@ -44,19 +42,19 @@ async fn parse_with_extensions(&self) -> Result<i32, FieldError> {
 
 ## ErrorExtensions
 
-手动构造新的`FieldError`很麻烦。这就是为什么`Async-graphql`提供
-两个方便特性，可将您的错误转换为适当的`FieldError`扩展。
+手动构造新的`Error`很麻烦。这就是为什么`Async-graphql`提供
+两个方便特性，可将您的错误转换为适当的`Error`扩展。
 
 扩展任何错误的最简单方法是对错误调用`extend_with`。
-这将把任何错误转换为具有给定扩展信息的`FieldError`。
+这将把任何错误转换为具有给定扩展信息的`Error`。
 
 ```rust
 use std::num::ParseIntError;
-async fn parse_with_extensions(&self) -> FieldResult<i32> {
+async fn parse_with_extensions(&self) -> Result<i32> {
      Ok("234a"
          .parse()
-         .map_err(|err: ParseIntError| err.extend_with(|_err| json!({"code": 404})))?)
- }
+         .map_err(|err: ParseIntError| err.extend_with(|_err, e| e.set("code", 404)))?)
+}
 ```
 
 ### 为自定义错误实现ErrorExtensions
@@ -82,16 +80,13 @@ pub enum MyError {
 
 impl ErrorExtensions for MyError {
     // lets define our base extensions
-    fn extend(&self) -> FieldError {
-        let extensions = match self {
-            MyError::NotFound => json!({"code": "NOT_FOUND"}),
-            MyError::ServerError(reason) => json!({ "reason": reason }),
-            MyError::ErrorWithoutExtensions => {
-                json!("This will be ignored since it does not represent an object.")
-            }
-        };
-
-        FieldError(format!("{}", self), Some(extensions))
+    fn extend(&self) -> Error {
+        Error::new(format!("{}", self)).extend_with(|err, e| 
+            match self {
+              MyError::NotFound => e.set("code", "NOT_FOUND"),
+              MyError::ServerError(reason) => e.set("reason", reason),
+              MyError::ErrorWithoutExtensions => {}
+          })
     }
 }
 ```
@@ -99,10 +94,10 @@ impl ErrorExtensions for MyError {
 您只需要对错误调用`extend`即可将错误与其提供的扩展信息一起传递，或者通过`extend_with`进一步扩展错误信息。
 
 ```rust
-async fn parse_with_extensions_result(&self) -> FieldResult<i32> {
+async fn parse_with_extensions_result(&self) -> Result<i32> {
     // Err(MyError::NotFound.extend())
     // OR
-    Err(MyError::NotFound.extend_with(|_| json!({ "on_the_fly": "some_more_info" })))
+    Err(MyError::NotFound.extend_with(|_, e| e.set("on_the_fly", "some_more_info")))
 }
 ```
 
@@ -127,12 +122,11 @@ async fn parse_with_extensions_result(&self) -> FieldResult<i32> {
 
 ```rust
 use async_graphql::*;
-async fn parse_with_extensions(&self) -> FieldResult<i32> {
+async fn parse_with_extensions(&self) -> Result<i32> {
      Ok("234a"
          .parse()
-         .extend_err(|_| json!({"code": 404}))?)
- }
-
+         .extend_err(|_, e| e.set("code", 404))?)
+}
 ```
 
 ### 链式调用
@@ -141,14 +135,14 @@ async fn parse_with_extensions(&self) -> FieldResult<i32> {
 
 ```rust
 use async_graphql::*;
-async fn parse_with_extensions(&self) -> FieldResult<i32> {
+async fn parse_with_extensions(&self) -> Result<i32> {
     match "234a".parse() {
         Ok(n) => Ok(n),
         Err(e) => Err(e
-            .extend_with(|_| json!({"code": 404}))
-            .extend_with(|_| json!({"details": "some more info.."}))
+            .extend_with(|_, e| e.set("code", 404))
+            .extend_with(|_, e| e.set("details", "some more info.."))
             // keys may also overwrite previous keys...
-            .extend_with(|_| json!({"code": 500}))),
+            .extend_with(|_, e| e.set("code", 500))),
     }
 }
 ```
@@ -180,21 +174,21 @@ Rust的稳定版本还未提供特化功能，这就是为什么`ErrorExtensions
 缺点是下面的代码**不能**编译：
 
 ```rust,ignore,does_not_compile
-async fn parse_with_extensions_result(&self) -> FieldResult<i32> {
+async fn parse_with_extensions_result(&self) -> Result<i32> {
     // the trait `error::ErrorExtensions` is not implemented
     // for `std::num::ParseIntError`
-    "234a".parse().extend_err(|_| json!({"code": 404}))
+    "234a".parse().extend_err(|_, e| e.set("code", 404))
 }
 ```
 
 但这可以通过编译：
 
 ```rust,ignore,does_not_compile
-async fn parse_with_extensions_result(&self) -> FieldResult<i32> {
+async fn parse_with_extensions_result(&self) -> Result<i32> {
     // does work because ErrorExtensions is implemented for &ParseIntError
     "234a"
       .parse()
-      .map_err(|ref e: ParseIntError| e.extend_with(|_| json!({"code": 404})))
+      .map_err(|ref e: ParseIntError| e.extend_with(|_, e| e.set("code", 404)))
 }
 ```
 
