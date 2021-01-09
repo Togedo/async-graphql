@@ -5,7 +5,9 @@ use crate::{Name, Positioned};
 
 /// A selection performed by a query.
 pub struct Lookahead<'a> {
+    #[allow(missing_docs)]
     pub fragments: &'a HashMap<Name, Positioned<FragmentDefinition>>,
+    #[allow(missing_docs)]
     pub field: Option<&'a Field>,
 }
 

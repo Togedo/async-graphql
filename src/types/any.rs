@@ -28,27 +28,6 @@ impl<T: Into<Value>> From<T> for Any {
     }
 }
 
-impl serde::Serialize for Any {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::ser::Serializer,
-    {
-        serde_json::to_string(&serde_json::Value::from(self.0.clone()))
-            .unwrap()
-            .serialize(serializer)
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for Any {
-    fn deserialize<D>(deserializer: D) -> Result<Any, D::Error>
-    where
-        D: serde::de::Deserializer<'de>,
-    {
-        serde::Deserialize::deserialize(deserializer)
-            .map(|s: String| Any::from(serde_json::from_str::<serde_json::Value>(&s).unwrap()))
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;

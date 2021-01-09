@@ -39,19 +39,6 @@ impl<T: InputType> InputType for Option<T> {
     }
 }
 
-impl<T: InputValueType> InputValueType for Box<T> {
-    fn parse(value: Option<Value>) -> InputValueResult<Self> {
-        match value.unwrap_or_default() {
-            Value::Null => Ok(Box::new(T::parse(None)?)),
-            value => Ok(Box::new(T::parse(Some(value))?)),
-        }
-    }
-
-    fn to_value(&self) -> Value {
-        self.deref().to_value()
-    }
-}
-
 #[async_trait::async_trait]
 impl<T: OutputType + Sync> OutputType for Option<T> {
     async fn resolve(

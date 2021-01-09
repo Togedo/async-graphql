@@ -30,6 +30,6 @@ impl ScalarType for UtcDateTime {
     }
 
     fn to_value(&self) -> Value {
-        DateTimeUtc(**self).to_value()
+        (**self).to_value()
     }
 }
